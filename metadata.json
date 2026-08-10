@@ -1,0 +1,6 @@
+{
+  "name": "SignTalk",
+  "description": "Traductor de Lengua de Señas en Tiempo Real con seguimiento esquelético de manos, síntesis de voz, frases rápidas e historial.",
+  "requestFramePermissions": ["camera", "microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

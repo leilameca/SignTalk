@@ -1,0 +1,11 @@
+{
+  "available": false,
+  "version": "collecting-data",
+  "variant": "LSD",
+  "sequenceLength": 48,
+  "featureCount": 128,
+  "confidenceThreshold": 0.82,
+  "labels": [],
+  "metrics": null,
+  "trainedAt": null
+}

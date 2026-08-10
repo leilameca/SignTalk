@@ -1,0 +1,44 @@
+@import "tailwindcss";
+
+@layer utilities {
+  /* Custom smooth scrolling and mobile container styling */
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+}
+
+:root {
+  --primary-color: #1A73E3;
+  --primary-light: #EBF3FE;
+  --primary-dark: #1255AA;
+}
+
+html, body, #root {
+  min-height: 100%;
+  width: 100%;
+  max-width: 100%;
+  margin: 0;
+  overflow-x: hidden;
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+img, video, canvas, svg {
+  max-width: 100%;
+}
+
+/* Custom animated skeleton hand tracking pulsing effect */
+@keyframes pulseNode {
+  0%, 100% { transform: scale(1); opacity: 0.9; }
+  50% { transform: scale(1.35); opacity: 0.4; }
+}
+
+.animate-node-pulse {
+  animation: pulseNode 1.8s infinite ease-in-out;
+}
