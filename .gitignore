@@ -3,6 +3,7 @@ node_modules/
 dist/
 .wrangler/
 .venv/
+.tools/
 __pycache__/
 *.pyc
 .gradle
