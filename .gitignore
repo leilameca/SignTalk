@@ -26,7 +26,4 @@ local.properties
 .env*.local
 training/data/
 supabase/.temp/
-public/models/lsd/model.json
-public/models/lsd/group*.bin
-public/models/lsd/evaluation.json
 debug.keystore
