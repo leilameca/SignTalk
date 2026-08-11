@@ -21,7 +21,7 @@ create table if not exists public.model_training_settings (
   minimum_participants integer not null default 1 check (minimum_participants between 1 and 100),
   minimum_macro_f1 real not null default 0.70 check (minimum_macro_f1 between 0 and 1),
   minimum_class_recall real not null default 0.45 check (minimum_class_recall between 0 and 1),
-  confidence_threshold real not null default 0.82 check (confidence_threshold between 0.5 and 1),
+  confidence_threshold real not null default 0.68 check (confidence_threshold between 0.5 and 1),
   allow_experimental boolean not null default true,
   updated_by uuid references auth.users(id) on delete set null,
   updated_at timestamptz not null default now()
@@ -191,7 +191,7 @@ grant select, insert, delete on public.sign_recordings to authenticated;
 grant update (status, rejection_reason, reviewed_by, reviewed_at) on public.sign_recordings to authenticated;
 grant select on public.app_admins to authenticated;
 insert into public.model_training_settings (variant, minimum_samples, minimum_participants, minimum_macro_f1, minimum_class_recall, confidence_threshold, allow_experimental)
-values ('LSD', 1, 1, 0.70, 0.45, 0.82, true) on conflict (variant) do nothing;
+values ('LSD', 1, 1, 0.70, 0.45, 0.68, true) on conflict (variant) do nothing;
 drop policy if exists "training_settings_admin_select" on public.model_training_settings;
 drop policy if exists "training_settings_admin_update" on public.model_training_settings;
 create policy "training_settings_admin_select" on public.model_training_settings for select to authenticated using ((select public.is_app_admin()));

@@ -33,6 +33,7 @@ export const CameraTranslatorScreen: React.FC = () => {
   const lsdInferenceRunningRef = useRef(false);
   const lastLsdFrameRef = useRef(0);
   const lastLsdInferenceRef = useRef(0);
+  const lsdNeutralSinceRef = useRef<number | null>(null);
   const lastGeminiRequestRef = useRef(0);
   const [cameraState, setCameraState] = useState<'starting' | 'ready' | 'denied' | 'unsupported'>('starting');
   const [trackingReady, setTrackingReady] = useState(false);
@@ -200,33 +201,40 @@ export const CameraTranslatorScreen: React.FC = () => {
         if (settings.signLanguageVariant === 'LSD' && timestamp - lastLsdFrameRef.current >= 66) {
           lastLsdFrameRef.current = timestamp;
           if (result.landmarks.length) {
+            lsdNeutralSinceRef.current = null;
             lsdFramesRef.current = [...lsdFramesRef.current.slice(-47), {
               hands: result.landmarks,
               handedness: result.handednesses.map((categories) => categories[0]?.categoryName || 'Unknown'),
             }];
           } else {
-            lsdFramesRef.current = [];
-            lsdSamplesRef.current = [];
+            lsdNeutralSinceRef.current ??= timestamp;
           }
           const loadedModel = lsdModelRef.current;
-          if (loadedModel && lsdFramesRef.current.length >= 12 && !lsdInferenceRunningRef.current && timestamp - lastLsdInferenceRef.current >= 350) {
+          if (loadedModel && lsdFramesRef.current.length >= 20 && !lsdInferenceRunningRef.current && timestamp - lastLsdInferenceRef.current >= 350) {
             lastLsdInferenceRef.current = timestamp;
             lsdInferenceRunningRef.current = true;
             const sequence = [...lsdFramesRef.current];
             void predictLsdSequence(loadedModel, sequence).then((modelPrediction) => {
-              if (!modelPrediction || modelPrediction.code === 'none') {
+              if (!modelPrediction) {
                 lsdSamplesRef.current = [];
                 return;
               }
               const prediction: LocalSignPrediction = {
                 label: modelPrediction.label,
                 confidence: modelPrediction.confidence,
-                detail: `Modelo LSD ${modelPrediction.version}`,
+                detail: modelPrediction.accepted
+                  ? `Modelo LSD ${modelPrediction.version}`
+                  : `Candidato LSD · necesita ${Math.round(modelPrediction.threshold * 100)}%`,
               };
+              setLocalPrediction(prediction);
+              if (!modelPrediction.accepted || modelPrediction.code === 'none') {
+                lsdSamplesRef.current = [];
+                setDetection({ confidence: prediction.confidence, handDetails: `${prediction.detail} · Observando movimiento` });
+                return;
+              }
               lsdSamplesRef.current = [...lsdSamplesRef.current.slice(-2), prediction];
               const matching = lsdSamplesRef.current.filter((sample) => sample.label === prediction.label);
               if (matching.length < 3) return;
-              setLocalPrediction(prediction);
               const lastAdded = lastAutoAddedRef.current;
               const timestampNow = performance.now();
               const isNewTerm = !lastAdded || lastAdded.label !== prediction.label;
@@ -240,6 +248,11 @@ export const CameraTranslatorScreen: React.FC = () => {
                 lsdFramesRef.current = [];
               }
             }).finally(() => { lsdInferenceRunningRef.current = false; });
+          }
+          if (lsdNeutralSinceRef.current && timestamp - lsdNeutralSinceRef.current >= 1_000) {
+            lsdFramesRef.current = [];
+            lsdSamplesRef.current = [];
+            lsdNeutralSinceRef.current = null;
           }
         }
         if (timestamp - lastLocalInferenceRef.current >= 220) {

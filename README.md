@@ -180,6 +180,10 @@ El cargador:
 - descarga `model.json` con la versión como parámetro de caché;
 - sustituye el modelo anterior sin reinstalar la aplicación.
 
+El contrato `lsd-motion-v2` transforma cada secuencia en 48 pasos y 144 características. Incluye la forma normalizada de los dedos, presencia de cada mano, trayectoria y velocidad de las muñecas, y distancia relativa entre ambas manos. El navegador mantiene compatibilidad con los modelos anteriores de 128 características mientras se publica una versión nueva.
+
+Durante la inferencia, la interfaz muestra el mejor candidato aunque todavía no alcance el umbral. Solo agrega una palabra cuando el candidato supera la confianza configurada y se mantiene estable en varias evaluaciones. Al bajar las manos conserva brevemente la secuencia para terminar de interpretar el gesto completo.
+
 ## Entrenamiento local
 
 ```powershell

@@ -16,7 +16,7 @@ from sklearn.metrics import classification_report, confusion_matrix, f1_score, r
 from sklearn.model_selection import GroupShuffleSplit
 from sklearn.utils.class_weight import compute_class_weight
 
-from preprocess import FEATURE_COUNT, SEQUENCE_LENGTH, prepare_dataset, validate_coverage
+from preprocess import BASE_FEATURE_COUNT, FEATURE_CONTRACT, FEATURE_COUNT, SEQUENCE_LENGTH, prepare_dataset, validate_coverage
 
 
 def split_by_participant(features, labels, groups, seed: int):
@@ -43,12 +43,14 @@ def build_model(class_count: int) -> tf.keras.Model:
 
 def augment_startup(features: np.ndarray, labels: np.ndarray, copies: int = 16):
     augmented_features, augmented_labels = [features], [labels]
-    coordinate_width = FEATURE_COUNT - 2
+    local_coordinate_width = BASE_FEATURE_COUNT - 2
     for _ in range(copies - 1):
         candidate = features.copy()
-        noise = np.random.normal(0, 0.018, size=candidate[:, :, :coordinate_width].shape).astype(np.float32)
-        visibility = np.repeat((candidate[:, :, -2:].sum(axis=2, keepdims=True) > 0), coordinate_width, axis=2)
-        candidate[:, :, :coordinate_width] += noise * visibility
+        visible = candidate[:, :, local_coordinate_width:BASE_FEATURE_COUNT].sum(axis=2, keepdims=True) > 0
+        local_noise = np.random.normal(0, 0.018, size=candidate[:, :, :local_coordinate_width].shape).astype(np.float32)
+        candidate[:, :, :local_coordinate_width] += local_noise * visible
+        motion_noise = np.random.normal(0, 0.012, size=candidate[:, :, BASE_FEATURE_COUNT:].shape).astype(np.float32)
+        candidate[:, :, BASE_FEATURE_COUNT:] += motion_noise * visible
         shift = np.random.randint(-2, 3)
         candidate = np.roll(candidate, shift, axis=1)
         augmented_features.append(candidate)
@@ -66,7 +68,7 @@ def main(arguments) -> None:
     minimum_participants = arguments.minimum_participants if arguments.minimum_participants is not None else int(settings.get("minimum_participants", 1))
     minimum_f1 = arguments.minimum_f1 if arguments.minimum_f1 is not None else float(settings.get("minimum_macro_f1", 0.70))
     minimum_recall = arguments.minimum_recall if arguments.minimum_recall is not None else float(settings.get("minimum_class_recall", 0.45))
-    confidence_threshold = float(settings.get("confidence_threshold", 0.82))
+    confidence_threshold = float(settings.get("confidence_threshold", 0.68))
     allow_experimental = bool(settings.get("allow_experimental", False))
     validate_coverage(dataset, minimum_samples, minimum_participants)
 
@@ -129,6 +131,7 @@ def main(arguments) -> None:
             "variant": "LSD",
             "sequenceLength": SEQUENCE_LENGTH,
             "featureCount": FEATURE_COUNT,
+            "featureContract": FEATURE_CONTRACT,
             "confidenceThreshold": confidence_threshold,
             "experimental": experimental,
             "evaluationMode": report["evaluationMode"],

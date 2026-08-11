@@ -12,7 +12,12 @@ SEQUENCE_LENGTH = 48
 LANDMARKS_PER_HAND = 21
 COORDINATES = 3
 MAX_HANDS = 2
-FEATURE_COUNT = LANDMARKS_PER_HAND * COORDINATES * MAX_HANDS + MAX_HANDS
+HAND_FEATURES = LANDMARKS_PER_HAND * COORDINATES
+BASE_FEATURE_COUNT = HAND_FEATURES * MAX_HANDS + MAX_HANDS
+MOTION_FEATURES_PER_HAND = 6  # desplazamiento xyz + velocidad xyz
+INTER_HAND_FEATURES = 4  # vector xyz + distancia entre muñecas
+FEATURE_COUNT = BASE_FEATURE_COUNT + MOTION_FEATURES_PER_HAND * MAX_HANDS + INTER_HAND_FEATURES
+FEATURE_CONTRACT = "lsd-motion-v2"
 
 
 @dataclass(frozen=True)
@@ -29,7 +34,7 @@ def _point(point: Any) -> np.ndarray:
     return np.asarray([point.get("x", 0), point.get("y", 0), point.get("z", 0)], dtype=np.float32)
 
 
-def normalize_hand(hand: Any) -> np.ndarray | None:
+def normalize_hand(hand: Any) -> tuple[np.ndarray, np.ndarray, float] | None:
     if not isinstance(hand, list) or len(hand) < LANDMARKS_PER_HAND:
         return None
     points = np.stack([_point(point) for point in hand[:LANDMARKS_PER_HAND]])
@@ -38,41 +43,67 @@ def normalize_hand(hand: Any) -> np.ndarray | None:
     if palm_size < 1e-4:
         return None
     normalized = np.clip((points - wrist) / palm_size, -4.0, 4.0)
-    return normalized.reshape(-1).astype(np.float32)
+    return normalized.reshape(-1).astype(np.float32), wrist, palm_size
 
 
-def frame_features(frame: Any) -> np.ndarray:
-    result = np.zeros(FEATURE_COUNT, dtype=np.float32)
+def frame_entries(frame: Any) -> list[tuple[float, np.ndarray, np.ndarray, float]]:
     hands = frame.get("hands", []) if isinstance(frame, dict) else []
     handedness = frame.get("handedness", []) if isinstance(frame, dict) else []
     entries = []
     for index, hand in enumerate(hands[:MAX_HANDS]):
-        normalized = normalize_hand(hand)
-        if normalized is None:
+        hand_data = normalize_hand(hand)
+        if hand_data is None:
             continue
+        normalized, wrist, palm_size = hand_data
         side = str(handedness[index]).lower() if index < len(handedness) else ""
         wrist_x = float(hand[0].get("x", 0)) if hand and isinstance(hand[0], dict) else 0.0
         order = 0 if side == "left" else 1 if side == "right" else wrist_x
-        entries.append((order, normalized))
+        entries.append((order, normalized, wrist, palm_size))
     entries.sort(key=lambda item: item[0])
-    hand_width = LANDMARKS_PER_HAND * COORDINATES
-    for slot, (_, values) in enumerate(entries[:MAX_HANDS]):
-        start = slot * hand_width
-        result[start:start + hand_width] = values
-        result[hand_width * MAX_HANDS + slot] = 1.0
+    return entries[:MAX_HANDS]
+
+
+def encode_motion_sequence(frames: list[Any]) -> np.ndarray:
+    result = np.zeros((len(frames), FEATURE_COUNT), dtype=np.float32)
+    anchors: list[tuple[np.ndarray, float] | None] = [None] * MAX_HANDS
+    previous_displacements: list[np.ndarray | None] = [None] * MAX_HANDS
+    for frame_index, frame in enumerate(frames):
+        entries = frame_entries(frame)
+        for slot, (_, values, wrist, palm_size) in enumerate(entries):
+            start = slot * HAND_FEATURES
+            result[frame_index, start:start + HAND_FEATURES] = values
+            result[frame_index, HAND_FEATURES * MAX_HANDS + slot] = 1.0
+            if anchors[slot] is None:
+                anchors[slot] = (wrist.copy(), palm_size)
+            anchor_wrist, anchor_scale = anchors[slot]
+            displacement = np.clip((wrist - anchor_wrist) / max(anchor_scale, 1e-4), -6.0, 6.0)
+            previous = previous_displacements[slot]
+            velocity = np.zeros(3, dtype=np.float32) if previous is None else np.clip(displacement - previous, -3.0, 3.0)
+            motion_start = BASE_FEATURE_COUNT + slot * MOTION_FEATURES_PER_HAND
+            result[frame_index, motion_start:motion_start + 3] = displacement
+            result[frame_index, motion_start + 3:motion_start + 6] = velocity
+            previous_displacements[slot] = displacement
+        if len(entries) == 2:
+            first_wrist, first_scale = entries[0][2], entries[0][3]
+            second_wrist, second_scale = entries[1][2], entries[1][3]
+            scale = max((first_scale + second_scale) / 2.0, 1e-4)
+            vector = np.clip((second_wrist - first_wrist) / scale, -6.0, 6.0)
+            relation_start = FEATURE_COUNT - INTER_HAND_FEATURES
+            result[frame_index, relation_start:relation_start + 3] = vector
+            result[frame_index, relation_start + 3] = min(8.0, float(np.linalg.norm(vector)))
     return result
 
 
 def sequence_features(frames: Any) -> np.ndarray | None:
     if not isinstance(frames, list) or not frames:
         return None
-    encoded = np.stack([frame_features(frame) for frame in frames])
-    visible = encoded[:, -MAX_HANDS:].sum(axis=1) > 0
-    encoded = encoded[visible]
-    if len(encoded) < 8:
+    visible_frames = [frame for frame in frames if frame_entries(frame)]
+    if len(visible_frames) < 8:
         return None
-    indexes = np.rint(np.linspace(0, len(encoded) - 1, SEQUENCE_LENGTH)).astype(int)
-    return encoded[indexes]
+    # Math.floor(x + .5) coincide con Math.round del navegador, incluso en empates.
+    indexes = np.floor(np.linspace(0, len(visible_frames) - 1, SEQUENCE_LENGTH) + 0.5).astype(int)
+    sampled_frames = [visible_frames[index] for index in indexes]
+    return encode_motion_sequence(sampled_frames)
 
 
 def prepare_dataset(payload: dict[str, Any]) -> PreparedDataset:
@@ -110,4 +141,3 @@ def validate_coverage(dataset: PreparedDataset, minimum_samples: int, minimum_pa
             problems.append(f"{label}: {people}/{minimum_participants} participantes")
     if problems:
         raise ValueError("Cobertura insuficiente; no se publicará el modelo:\n- " + "\n- ".join(problems))
-

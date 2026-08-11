@@ -2,6 +2,8 @@
 
 Este proceso usa exclusivamente secuencias de landmarks aprobadas. Los videos privados no se descargan para entrenar la primera versión.
 
+El contrato vigente `lsd-motion-v2` reutiliza las grabaciones existentes y extrae 144 características por paso: forma local de los dedos, presencia, desplazamiento y velocidad de cada muñeca, y relación espacial entre ambas manos. La trayectoria se expresa respecto al inicio de la seña para reducir la dependencia de la posición de la persona dentro de la cámara.
+
 Importante: aprobar una muestra en el panel administrativo no cambia el lector inmediatamente. La muestra solo se incorpora al próximo entrenamiento cuando el pipeline exporta `sign_recordings` con `status = approved` y publica un nuevo modelo en `public/models/lsd/`.
 
 ## Protección de calidad

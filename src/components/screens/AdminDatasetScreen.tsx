@@ -58,7 +58,7 @@ interface SignLabelProposal {
 const DEFAULT_TRAINING_SETTINGS: TrainingSettings = {
   variant: 'LSD', minimum_samples: 1, minimum_participants: 1,
   minimum_macro_f1: 0.70, minimum_class_recall: 0.45,
-  confidence_threshold: 0.82, allow_experimental: true,
+  confidence_threshold: 0.68, allow_experimental: true,
 };
 
 const statusLabel: Record<ReviewStatus, string> = { pending: 'Pendiente', approved: 'Aprobada', rejected: 'Rechazada' };
