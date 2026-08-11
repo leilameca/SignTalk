@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { NormalizedLandmark } from '@mediapipe/tasks-vision';
-import { classifyLocalSign, classifyLocalSignSequence, classifyLsdAlphabet } from './localSignClassifier';
+import { classifyAslAlphabet, classifyAslAlphabetSequence, classifyLocalSign, classifyLocalSignSequence, classifyLsdAlphabet } from './localSignClassifier';
 
 const point = (x: number, y: number, z = 0): NormalizedLandmark => ({ x, y, z, visibility: 1 });
 
@@ -30,6 +30,19 @@ test('reconoce formas inequívocas del abecedario oficial LSD', () => {
   assert.equal(classifyLsdAlphabet(makeHand([true, true, true, true]))?.label, 'B');
   assert.equal(classifyLsdAlphabet(makeHand([false, false, false, true]))?.label, 'I');
   assert.equal(classifyLsdAlphabet(makeHand([true, false, false, false], true))?.label, 'L');
+});
+
+test('reconoce el alfabeto manual ASL sin agregar la Ñ dominicana', () => {
+  assert.equal(classifyAslAlphabet(makeHand([true, true, true, true]))?.label, 'B');
+  assert.equal(classifyAslAlphabet(makeHand([false, false, false, true]))?.label, 'I');
+  assert.match(classifyAslAlphabet(makeHand([true, false, false, false], true))?.detail || '', /Abecedario ASL/);
+
+  const nHand = makeHand([false, false, false, false]);
+  const nMovement = Array.from({ length: 10 }, (_, index) => ({
+    hand: translateHand(nHand, index % 2 ? 0.04 : 0, 0),
+    timestamp: index * 100,
+  }));
+  assert.notEqual(classifyAslAlphabetSequence(nMovement)?.label, 'Ñ');
 });
 
 test('no presenta la regla ASL de te quiero como palabra LSD', () => {

@@ -43,14 +43,16 @@ const handShape = (hand: NormalizedLandmark[]) => {
 };
 
 const OFFICIAL_LSD_DICTIONARY = 'Diccionario oficial CONADIS · MINERD · ANSORDO';
+const ASL_FINGERSPELLING_SOURCE = 'Alfabeto manual americano · NIDCD';
+type AlphabetVariant = 'LSD' | 'ASL';
 const clampConfidence = (value: number) => Math.max(0.5, Math.min(0.96, value));
 const normalizedDistance = (hand: NormalizedLandmark[], first: number, second: number, palmSize: number) => distance(hand[first], hand[second]) / Math.max(palmSize, 0.001);
 const indexDirection = (hand: NormalizedLandmark[]) => ({ x: hand[8].x - hand[5].x, y: hand[8].y - hand[5].y });
 
-const makeAlphabetPrediction = (letter: string, confidence: number, qualifier = 'forma estática'): LocalSignPrediction => ({
+const makeAlphabetPrediction = (variant: AlphabetVariant, letter: string, confidence: number, qualifier = 'forma estática'): LocalSignPrediction => ({
   label: letter,
   confidence: clampConfidence(confidence),
-  detail: `Abecedario LSD · ${qualifier} · ${OFFICIAL_LSD_DICTIONARY}`,
+  detail: `Abecedario ${variant} · ${qualifier} · ${variant === 'LSD' ? OFFICIAL_LSD_DICTIONARY : ASL_FINGERSPELLING_SOURCE}`,
 });
 
 /**
@@ -58,7 +60,7 @@ const makeAlphabetPrediction = (letter: string, confidence: number, qualifier = 
  * son visualmente muy parecidas; se mantienen con menor confianza para exigir
  * estabilidad y permitir corrección manual antes de agregarlas.
  */
-export function classifyLsdAlphabet(hand: NormalizedLandmark[]): LocalSignPrediction | null {
+function classifyAlphabet(hand: NormalizedLandmark[], variant: AlphabetVariant): LocalSignPrediction | null {
   if (hand.length < 21) return null;
   const { palmSize, thumb, fingers, extended } = handShape(hand);
   if (palmSize < 0.04) return null;
@@ -74,36 +76,36 @@ export function classifyLsdAlphabet(hand: NormalizedLandmark[]): LocalSignPredic
   const downwardIndex = direction.y > Math.abs(direction.x) * 0.75;
   const crossedIndexMiddle = (hand[8].x - hand[12].x) * (hand[6].x - hand[10].x) < 0;
 
-  if (indexThumb < 0.42 && middle && ring && pinky) return makeAlphabetPrediction('F', 0.9, 'índice y pulgar unidos');
-  if (index && middle && ring && !pinky && !thumb) return makeAlphabetPrediction('W', 0.88, 'tres dedos extendidos');
+  if (indexThumb < 0.42 && middle && ring && pinky) return makeAlphabetPrediction(variant, 'F', 0.9, 'índice y pulgar unidos');
+  if (index && middle && ring && !pinky && !thumb) return makeAlphabetPrediction(variant, 'W', 0.88, 'tres dedos extendidos');
   if (index && middle && !ring && !pinky) {
-    if (horizontalIndex) return makeAlphabetPrediction('H', 0.86, 'índice y medio hacia el centro');
-    if (thumb) return makeAlphabetPrediction(downwardIndex ? 'P' : 'K', 0.83, downwardIndex ? 'forma K orientada al receptor' : 'índice, medio y pulgar');
-    if (crossedIndexMiddle) return makeAlphabetPrediction('R', 0.86, 'índice y medio cruzados');
-    return makeAlphabetPrediction(indexMiddle < 0.48 ? 'U' : 'V', indexMiddle < 0.48 ? 0.84 : 0.88, indexMiddle < 0.48 ? 'índice y medio juntos' : 'índice y medio separados');
+    if (horizontalIndex) return makeAlphabetPrediction(variant, 'H', 0.86, 'índice y medio hacia el centro');
+    if (thumb) return makeAlphabetPrediction(variant, downwardIndex ? 'P' : 'K', 0.83, downwardIndex ? 'forma K orientada hacia abajo' : 'índice, medio y pulgar');
+    if (crossedIndexMiddle) return makeAlphabetPrediction(variant, 'R', 0.86, 'índice y medio cruzados');
+    return makeAlphabetPrediction(variant, indexMiddle < 0.48 ? 'U' : 'V', indexMiddle < 0.48 ? 0.84 : 0.88, indexMiddle < 0.48 ? 'índice y medio juntos' : 'índice y medio separados');
   }
   if (thumb && index && !middle && !ring && !pinky) {
-    if (horizontalIndex) return makeAlphabetPrediction('G', 0.86, 'índice y pulgar hacia el centro');
-    if (downwardIndex) return makeAlphabetPrediction('Q', 0.82, 'forma G orientada hacia abajo');
-    return makeAlphabetPrediction('L', 0.9, 'índice arriba y pulgar afuera');
+    if (horizontalIndex) return makeAlphabetPrediction(variant, 'G', 0.86, 'índice y pulgar hacia el centro');
+    if (downwardIndex) return makeAlphabetPrediction(variant, 'Q', 0.82, 'forma G orientada hacia abajo');
+    return makeAlphabetPrediction(variant, 'L', 0.9, 'índice arriba y pulgar afuera');
   }
-  if (thumb && !index && !middle && !ring && pinky) return makeAlphabetPrediction('Y', 0.92, 'pulgar y meñique extendidos');
-  if (!thumb && !index && !middle && !ring && pinky) return makeAlphabetPrediction('I', 0.9, 'meñique extendido');
-  if (!thumb && extended === 4) return makeAlphabetPrediction('B', 0.9, 'mano plana con dedos juntos');
+  if (thumb && !index && !middle && !ring && pinky) return makeAlphabetPrediction(variant, 'Y', 0.92, 'pulgar y meñique extendidos');
+  if (!thumb && !index && !middle && !ring && pinky) return makeAlphabetPrediction(variant, 'I', 0.9, 'meñique extendido');
+  if (!thumb && extended === 4) return makeAlphabetPrediction(variant, 'B', 0.9, 'mano plana con dedos juntos');
   if (!thumb && index && !middle && !ring && !pinky) {
     const indexPipAngle = jointAngle(hand[5], hand[6], hand[7]);
-    if (indexPipAngle < 125) return makeAlphabetPrediction('X', 0.84, 'índice en forma de gancho');
-    return makeAlphabetPrediction('D', indexThumb < 0.75 ? 0.84 : 0.76, 'índice arriba y demás dedos en círculo');
+    if (indexPipAngle < 125) return makeAlphabetPrediction(variant, 'X', 0.84, 'índice en forma de gancho');
+    return makeAlphabetPrediction(variant, 'D', indexThumb < 0.75 ? 0.84 : 0.76, 'índice arriba y demás dedos en círculo');
   }
 
   const allTipsNearThumb = [indexThumb, middleThumb, ringThumb, pinkyThumb].every((value) => value < 0.72);
-  if (extended === 0 && allTipsNearThumb) return makeAlphabetPrediction('O', 0.86, 'puntas de los dedos formando un círculo');
+  if (extended === 0 && allTipsNearThumb) return makeAlphabetPrediction(variant, 'O', 0.86, 'puntas de los dedos formando un círculo');
 
   const curvedSpread = extended <= 1
     && indexThumb > 0.8
     && middleThumb > 0.8
     && normalizedDistance(hand, 8, 20, palmSize) > 1.15;
-  if (curvedSpread) return makeAlphabetPrediction('C', 0.82, 'mano curva en forma de C');
+  if (curvedSpread) return makeAlphabetPrediction(variant, 'C', 0.82, 'mano curva en forma de C');
 
   if (extended === 0) {
     const thumbDistances = [
@@ -113,20 +115,23 @@ export function classifyLsdAlphabet(hand: NormalizedLandmark[]): LocalSignPredic
       normalizedDistance(hand, 4, 17, palmSize),
     ];
     const closest = thumbDistances.indexOf(Math.min(...thumbDistances));
-    if (closest === 3) return makeAlphabetPrediction('M', 0.76, 'pulgar hacia el meñique bajo tres dedos');
-    if (closest === 2) return makeAlphabetPrediction('N', 0.76, 'pulgar bajo dos dedos');
-    if (closest === 1) return makeAlphabetPrediction('T', 0.75, 'pulgar entre índice y medio');
+    if (closest === 3) return makeAlphabetPrediction(variant, 'M', 0.76, 'pulgar hacia el meñique bajo tres dedos');
+    if (closest === 2) return makeAlphabetPrediction(variant, 'N', 0.76, 'pulgar bajo dos dedos');
+    if (closest === 1) return makeAlphabetPrediction(variant, 'T', 0.75, 'pulgar entre índice y medio');
     const fingertipsFoldedTowardThumb = (indexThumb + middleThumb + ringThumb + pinkyThumb) / 4 < 1.05;
-    return makeAlphabetPrediction(fingertipsFoldedTowardThumb ? 'E' : (thumb ? 'A' : 'S'), 0.74, fingertipsFoldedTowardThumb ? 'dedos doblados sobre el pulgar' : 'forma de puño');
+    return makeAlphabetPrediction(variant, fingertipsFoldedTowardThumb ? 'E' : (thumb ? 'A' : 'S'), 0.74, fingertipsFoldedTowardThumb ? 'dedos doblados sobre el pulgar' : 'forma de puño');
   }
 
   return null;
 }
 
-export function classifyLsdAlphabetSequence(frames: LocalSignFrame[]): LocalSignPrediction | null {
+export const classifyLsdAlphabet = (hand: NormalizedLandmark[]) => classifyAlphabet(hand, 'LSD');
+export const classifyAslAlphabet = (hand: NormalizedLandmark[]) => classifyAlphabet(hand, 'ASL');
+
+function classifyAlphabetSequence(frames: LocalSignFrame[], variant: AlphabetVariant): LocalSignPrediction | null {
   if (frames.length < 6) return null;
   const recent = frames.slice(-10);
-  const predictions = recent.map(({ hand }) => classifyLsdAlphabet(hand));
+  const predictions = recent.map(({ hand }) => classifyAlphabet(hand, variant));
   const base = predictions.filter((item): item is LocalSignPrediction => Boolean(item));
   if (!base.length) return null;
   const first = recent[0].hand;
@@ -138,17 +143,19 @@ export function classifyLsdAlphabetSequence(frames: LocalSignFrame[]): LocalSign
   const horizontalTurns = directions.slice(1).filter((direction, index) => direction !== directions[index]).length;
 
   const iRatio = base.filter((item) => item.label === 'I').length / recent.length;
-  if (iRatio >= 0.6 && Math.abs(travelX) > 0.3 && Math.abs(travelY) > 0.25) return makeAlphabetPrediction('J', 0.86, 'movimiento de J con el meñique');
+  if (iRatio >= 0.6 && Math.abs(travelX) > 0.3 && Math.abs(travelY) > 0.25) return makeAlphabetPrediction(variant, 'J', 0.86, 'movimiento de J con el meñique');
 
-  const nRatio = base.filter((item) => item.label === 'N').length / recent.length;
-  if (nRatio >= 0.5 && Math.abs(travelX) > 0.28 && horizontalTurns >= 1) return makeAlphabetPrediction('Ñ', 0.84, 'movimiento lateral de la forma N');
+  if (variant === 'LSD') {
+    const nRatio = base.filter((item) => item.label === 'N').length / recent.length;
+    if (nRatio >= 0.5 && Math.abs(travelX) > 0.28 && horizontalTurns >= 1) return makeAlphabetPrediction(variant, 'Ñ', 0.84, 'movimiento lateral de la forma N');
+  }
 
   const indexOnlyRatio = recent.filter(({ hand }) => {
     const shape = handShape(hand);
     return shape.fingers[0] && !shape.fingers[1] && !shape.fingers[2] && !shape.fingers[3];
   }).length / recent.length;
   if (indexOnlyRatio >= 0.75 && Math.abs(travelX) > 0.7 && Math.abs(travelY) > 0.25 && horizontalTurns >= 1) {
-    return makeAlphabetPrediction('Z', 0.86, 'movimiento trazado con el índice');
+    return makeAlphabetPrediction(variant, 'Z', 0.86, 'movimiento trazado con el índice');
   }
 
   const counts = new Map<string, LocalSignPrediction[]>();
@@ -157,6 +164,9 @@ export function classifyLsdAlphabetSequence(frames: LocalSignFrame[]): LocalSign
   if (!stable || stable[1].length / recent.length < 0.65) return null;
   return stable[1].reduce((best, prediction) => prediction.confidence > best.confidence ? prediction : best);
 }
+
+export const classifyLsdAlphabetSequence = (frames: LocalSignFrame[]) => classifyAlphabetSequence(frames, 'LSD');
+export const classifyAslAlphabetSequence = (frames: LocalSignFrame[]) => classifyAlphabetSequence(frames, 'ASL');
 
 /** Dynamic signs must be inferred from a sequence, never from one frozen frame. */
 export function classifyLocalSignSequence(frames: LocalSignFrame[], variant: 'LSD' | 'ASL'): LocalSignPrediction | null {

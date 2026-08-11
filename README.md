@@ -23,7 +23,7 @@ El análisis con Gemini es opcional y está deshabilitado en la interfaz públic
 
 ## Reglas locales LSD
 
-Las reglas de respaldo se basan en el [Diccionario Oficial de Lengua de Señas Dominicana](https://diccionariolsrd.cc/), elaborado por CONADIS, MINERD y ANSORDO. El traductor separa **Señas LSD** de **Abecedario LSD** para evitar que una postura compartida se interprete simultáneamente como palabra, número y letra.
+Las reglas de respaldo LSD se basan en el [Diccionario Oficial de Lengua de Señas Dominicana](https://diccionariolsrd.cc/), elaborado por CONADIS, MINERD y ANSORDO. Al seleccionar ASL en Ajustes, el modo **Abecedario ASL** usa el alfabeto manual americano (A–Z, con J y Z dinámicas) descrito por el NIDCD. El traductor separa **Señas** de **Abecedario** para evitar que una postura compartida se interprete simultáneamente como palabra, número y letra.
 
 - En modo señas, el modelo entrenado tiene prioridad; las reglas temporales oficiales funcionan como respaldo para movimientos básicos como `No`, `Hola`, `Gracias`, `Arriba` y `Abajo`.
 - En modo abecedario se reconocen las 27 letras, incluida `Ñ`; `J`, `Ñ` y `Z` requieren movimiento.
