@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { FilesetResolver, HandLandmarker, type NormalizedLandmark } from '@mediapipe/tasks-vision';
-import { ArrowLeft, Camera, CheckCircle2, Database, Loader2, RotateCcw, ShieldCheck, SwitchCamera, Trash2, Upload, WifiOff } from 'lucide-react';
+import { ArrowLeft, Camera, CheckCircle2, Database, Loader2, MessageSquarePlus, RotateCcw, ShieldCheck, SwitchCamera, Trash2, Upload, WifiOff } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { useAuth } from '../../context/AuthContext';
 import { supabase } from '../../lib/supabase';
@@ -17,6 +17,15 @@ interface SignLabel {
   code: string;
   display_name: string;
   motion_type: 'static' | 'dynamic' | 'two_hand';
+}
+
+interface SignLabelProposal {
+  id: string;
+  display_name: string;
+  motion_type: SignLabel['motion_type'];
+  status: 'pending' | 'approved' | 'rejected';
+  rejection_reason: string | null;
+  created_at: string;
 }
 
 interface LandmarkFrame {
@@ -69,6 +78,10 @@ export const DatasetContributionScreen: React.FC = () => {
   const [consentProduct, setConsentProduct] = useState(false);
   const [labels, setLabels] = useState<SignLabel[]>(FALLBACK_LABELS);
   const [selectedLabel, setSelectedLabel] = useState('hola');
+  const [proposals, setProposals] = useState<SignLabelProposal[]>([]);
+  const [proposedText, setProposedText] = useState('');
+  const [proposedMotion, setProposedMotion] = useState<SignLabel['motion_type']>('dynamic');
+  const [proposalSaving, setProposalSaving] = useState(false);
   const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
   const [cameraReady, setCameraReady] = useState(false);
   const [trackingReady, setTrackingReady] = useState(false);
@@ -164,6 +177,9 @@ export const DatasetContributionScreen: React.FC = () => {
     });
     void supabase.from('sign_labels').select('code,display_name,motion_type').eq('variant', 'LSD').eq('active', true).order('display_name').then(({ data }) => {
       if (data?.length) setLabels(data as SignLabel[]);
+    });
+    void supabase.from('sign_label_proposals').select('id,display_name,motion_type,status,rejection_reason,created_at').eq('user_id', user.id).order('created_at', { ascending: false }).then(({ data }) => {
+      if (data) setProposals(data as SignLabelProposal[]);
     });
   }, [refreshPendingCount, user]);
 
@@ -336,6 +352,36 @@ export const DatasetContributionScreen: React.FC = () => {
     await refreshPendingCount();
   };
 
+  const submitLabelProposal = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!user || proposalSaving) return;
+    const displayName = proposedText.trim().replace(/\s+/g, ' ');
+    if (displayName.length < 2 || displayName.length > 80) {
+      setError('Escribe una palabra o frase de 2 a 80 caracteres.');
+      return;
+    }
+    if (labels.some((label) => label.display_name.toLocaleLowerCase('es') === displayName.toLocaleLowerCase('es'))) {
+      setError('Esa palabra o frase ya está disponible en el selector.');
+      return;
+    }
+    setProposalSaving(true);
+    setError('');
+    const { data, error: proposalError } = await supabase.from('sign_label_proposals').insert({
+      user_id: user.id,
+      display_name: displayName,
+      variant: 'LSD',
+      motion_type: proposedMotion,
+    }).select('id,display_name,motion_type,status,rejection_reason,created_at').single();
+    if (proposalError || !data) {
+      setError(proposalError?.code === '23505' ? 'Esa propuesta ya está pendiente o fue aprobada.' : 'No se pudo enviar la propuesta. Inténtalo nuevamente.');
+    } else {
+      setProposals((current) => [data as SignLabelProposal, ...current]);
+      setProposedText('');
+      setStatus('Propuesta enviada. Cuando el administrador la apruebe aparecerá en el selector para grabarla.');
+    }
+    setProposalSaving(false);
+  };
+
   const withdrawConsent = async () => {
     if (!user || !participant || !navigator.onLine || !window.confirm('¿Deseas retirar tu consentimiento y eliminar todas tus grabaciones aportadas?')) return;
     setBusy(true);
@@ -388,6 +434,15 @@ export const DatasetContributionScreen: React.FC = () => {
       </section>
       <section className="min-w-0 space-y-4 rounded-3xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
         <div><p className="text-xs font-black uppercase tracking-wider text-emerald-700">Etiqueta LSD</p><select value={selectedLabel} onChange={(event) => { setSelectedLabel(event.target.value); setCaptured(null); }} disabled={recording || busy} className="mt-2 w-full rounded-xl border border-slate-300 px-3 py-3 text-sm font-bold">{labels.map((label) => <option key={label.code} value={label.code}>{label.display_name}</option>)}</select><p className="mt-2 text-xs text-slate-500">Tipo: {selected?.motion_type === 'two_hand' ? 'dos manos' : selected?.motion_type === 'dynamic' ? 'con movimiento' : 'estática'}</p></div>
+        <details className="rounded-2xl border border-blue-200 bg-blue-50 p-4">
+          <summary className="flex cursor-pointer list-none items-center gap-2 text-sm font-black text-blue-950"><MessageSquarePlus className="h-5 w-5" />¿No encuentras la palabra o frase?</summary>
+          <form onSubmit={submitLabelProposal} className="mt-3 space-y-3">
+            <label className="block text-xs font-bold text-blue-950">Nueva palabra o frase<input value={proposedText} onChange={(event) => setProposedText(event.target.value)} minLength={2} maxLength={80} placeholder="Ej.: ¿Dónde está la parada?" className="mt-1.5 w-full rounded-xl border border-blue-200 bg-white px-3 py-3 text-sm font-normal text-slate-900" /></label>
+            <label className="block text-xs font-bold text-blue-950">Tipo de seña<select value={proposedMotion} onChange={(event) => setProposedMotion(event.target.value as SignLabel['motion_type'])} className="mt-1.5 w-full rounded-xl border border-blue-200 bg-white px-3 py-3 text-sm font-normal text-slate-900"><option value="dynamic">Con movimiento</option><option value="static">Estática</option><option value="two_hand">Dos manos</option></select></label>
+            <button disabled={proposalSaving || proposedText.trim().length < 2} className="flex w-full items-center justify-center gap-2 rounded-xl bg-blue-700 px-4 py-3 text-xs font-black text-white disabled:opacity-40">{proposalSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <MessageSquarePlus className="h-4 w-4" />}Enviar propuesta</button>
+          </form>
+          {proposals.length > 0 && <div className="mt-4 space-y-2"><p className="text-[11px] font-black uppercase tracking-wider text-blue-900">Tus propuestas recientes</p>{proposals.slice(0, 4).map((proposal) => <div key={proposal.id} className="rounded-xl bg-white p-3 text-xs"><div className="flex items-center justify-between gap-2"><span className="font-bold text-slate-800">{proposal.display_name}</span><span className={`rounded-full px-2 py-1 text-[10px] font-black ${proposal.status === 'approved' ? 'bg-emerald-100 text-emerald-700' : proposal.status === 'rejected' ? 'bg-rose-100 text-rose-700' : 'bg-amber-100 text-amber-700'}`}>{proposal.status === 'approved' ? 'Aprobada' : proposal.status === 'rejected' ? 'Rechazada' : 'Pendiente'}</span></div>{proposal.rejection_reason && <p className="mt-1 text-rose-600">{proposal.rejection_reason}</p>}</div>)}</div>}
+        </details>
         <div className="rounded-2xl bg-slate-50 p-4 text-xs leading-relaxed text-slate-600"><strong className="text-slate-900">Cómo grabar:</strong> muestra la seña completa, deja ambas manos dentro del encuadre y evita que otra persona aparezca en el video.</div>
         {!captured ? <button onClick={startRecording} disabled={!cameraReady || recording || busy} className="w-full rounded-2xl bg-rose-600 px-5 py-3.5 text-sm font-black text-white disabled:opacity-40"><Camera className="mr-2 inline h-4 w-4" />{recording ? 'Grabando…' : 'Grabar ejemplo de 3 segundos'}</button> : <div className="space-y-3"><video src={previewUrl} controls playsInline className="aspect-video w-full rounded-2xl bg-black object-contain" /><p className="text-xs font-semibold text-slate-600">{captured.frames.length} fotogramas útiles con manos detectadas.</p><div className="grid grid-cols-2 gap-2"><button onClick={() => setCaptured(null)} disabled={busy} className="rounded-xl bg-slate-100 px-3 py-3 text-xs font-black text-slate-700"><RotateCcw className="mr-1 inline h-4 w-4" />Repetir</button><button onClick={() => void saveCapture()} disabled={busy || !approvedConsent} className="rounded-xl bg-emerald-600 px-3 py-3 text-xs font-black text-white disabled:opacity-40">{busy ? <Loader2 className="mr-1 inline h-4 w-4 animate-spin" /> : <Upload className="mr-1 inline h-4 w-4" />}Enviar</button></div><label className="flex items-start gap-2 rounded-xl bg-emerald-50 p-3 text-xs text-emerald-900"><input type="checkbox" checked={approvedConsent} onChange={(event) => setApprovedConsent(event.target.checked)} className="mt-0.5" /><span>Confirmo que la etiqueta es correcta y que deseo aportar esta grabación.</span></label></div>}
         <div className="border-t border-slate-100 pt-4"><p className="flex items-center gap-2 text-xs font-bold text-slate-600"><Database className="h-4 w-4" />Los videos se almacenan en un bucket privado.</p><button onClick={() => void syncPending()} disabled={!pendingCount || busy || !navigator.onLine} className="mt-3 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-xs font-bold disabled:opacity-40"><CheckCircle2 className="mr-1 inline h-4 w-4" />Sincronizar pendientes</button><button onClick={() => void withdrawConsent()} disabled={busy || !navigator.onLine} className="mt-2 w-full rounded-xl px-3 py-2.5 text-xs font-bold text-rose-600 disabled:opacity-40"><Trash2 className="mr-1 inline h-4 w-4" />Retirar consentimiento y borrar aportes</button></div>

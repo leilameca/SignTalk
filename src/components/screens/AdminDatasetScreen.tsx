@@ -45,6 +45,16 @@ interface LsdSignLabel {
   display_name: string;
 }
 
+interface SignLabelProposal {
+  id: string;
+  user_id: string;
+  display_name: string;
+  motion_type: 'static' | 'dynamic' | 'two_hand';
+  status: 'pending' | 'approved' | 'rejected';
+  rejection_reason: string | null;
+  created_at: string;
+}
+
 const DEFAULT_TRAINING_SETTINGS: TrainingSettings = {
   variant: 'LSD', minimum_samples: 1, minimum_participants: 1,
   minimum_macro_f1: 0.70, minimum_class_recall: 0.45,
@@ -71,21 +81,25 @@ export const AdminDatasetScreen: React.FC = () => {
   const [trainingSettings, setTrainingSettings] = useState<TrainingSettings>(DEFAULT_TRAINING_SETTINGS);
   const [modelStatus, setModelStatus] = useState<LsdModelManifestSummary | null>(null);
   const [signLabels, setSignLabels] = useState<LsdSignLabel[]>([]);
+  const [labelProposals, setLabelProposals] = useState<SignLabelProposal[]>([]);
+  const [proposalReviewing, setProposalReviewing] = useState('');
   const [error, setError] = useState('');
 
   const loadRecordings = useCallback(async () => {
     if (!isAdmin) return;
     setLoading(true);
     setError('');
-    const [recordingsResult, settingsResult, labelsResult] = await Promise.all([
+    const [recordingsResult, settingsResult, labelsResult, proposalsResult] = await Promise.all([
       supabase.from('sign_recordings').select('id,participant_id,storage_path,duration_ms,frame_count,camera_facing,status,rejection_reason,reviewed_at,created_at,sign_labels(code,display_name,variant,motion_type),dataset_participants(pseudonym,dominant_hand,country_code)').order('created_at', { ascending: false }),
       supabase.from('model_training_settings').select('variant,minimum_samples,minimum_participants,minimum_macro_f1,minimum_class_recall,confidence_threshold,allow_experimental').eq('variant', 'LSD').single(),
       supabase.from('sign_labels').select('code,display_name').eq('variant', 'LSD').eq('active', true).order('display_name'),
+      supabase.from('sign_label_proposals').select('id,user_id,display_name,motion_type,status,rejection_reason,created_at').eq('variant', 'LSD').order('created_at', { ascending: false }),
     ]);
     if (recordingsResult.error) setError('No se pudieron cargar las muestras. Verifica que la migración de administración esté aplicada.');
     else setRecordings((recordingsResult.data || []) as unknown as ReviewRecording[]);
     if (!settingsResult.error && settingsResult.data) setTrainingSettings(settingsResult.data as TrainingSettings);
     if (!labelsResult.error) setSignLabels((labelsResult.data || []) as LsdSignLabel[]);
+    if (!proposalsResult.error) setLabelProposals((proposalsResult.data || []) as SignLabelProposal[]);
     setLoading(false);
   }, [isAdmin]);
 
@@ -189,6 +203,24 @@ export const AdminDatasetScreen: React.FC = () => {
     setPublishSaving(false);
   };
 
+  const reviewLabelProposal = async (proposal: SignLabelProposal, decision: 'approved' | 'rejected') => {
+    const rejectionReason = decision === 'rejected' ? (window.prompt('Escribe una razón breve para rechazar esta propuesta:')?.trim() ?? null) : null;
+    if (decision === 'rejected' && (!rejectionReason || rejectionReason.length < 3)) return;
+    setProposalReviewing(proposal.id);
+    setError('');
+    const { error: reviewError } = await supabase.rpc('review_sign_label_proposal', {
+      proposal_id: proposal.id,
+      decision,
+      reason: rejectionReason,
+    });
+    if (reviewError) setError('No se pudo revisar la propuesta de palabra o frase.');
+    else {
+      setLabelProposals((current) => current.map((item) => item.id === proposal.id ? { ...item, status: decision, rejection_reason: rejectionReason } : item));
+      if (decision === 'approved') await loadRecordings();
+    }
+    setProposalReviewing('');
+  };
+
   const counts = useMemo(() => recordings.reduce((result, item) => ({ ...result, [item.status]: result[item.status] + 1 }), { pending: 0, approved: 0, rejected: 0 }), [recordings]);
   const visible = useMemo(() => recordings.filter((item) => item.status === filter), [recordings, filter]);
   const trainingReadiness = useMemo(() => {
@@ -217,6 +249,11 @@ export const AdminDatasetScreen: React.FC = () => {
       <div className="rounded-3xl border border-emerald-200 bg-emerald-50 p-5"><div className="flex items-center gap-3"><span className="rounded-2xl bg-emerald-600 p-3 text-white"><ShieldCheck className="h-6 w-6" /></span><div><h2 className="text-lg font-black text-slate-900">Revisión del dataset LSD</h2><p className="text-sm text-slate-600">Los videos permanecen privados y los enlaces de revisión vencen en 5 minutos.</p></div></div></div>
       <div className="flex items-start gap-2 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"><TriangleAlert className="mt-0.5 h-5 w-5 shrink-0" /><p><strong>Aprobar no entrena el lector inmediatamente.</strong> La muestra queda validada para el próximo entrenamiento; el traductor aprenderá esa seña cuando se genere, evalúe y publique una nueva versión del modelo LSD.</p></div>
       <div className={`rounded-2xl border p-4 ${modelStatus?.available ? 'border-emerald-200 bg-emerald-50' : 'border-slate-200 bg-slate-50'}`}><div className="flex items-start justify-between gap-3"><div><p className="text-xs font-black uppercase tracking-wider text-slate-600">Estado del lector LSD</p><p className="mt-1 text-sm font-black text-slate-900">{modelStatus?.version === 'pending' ? 'Entrenamiento solicitado' : modelStatus?.available ? `Modelo publicado (${modelStatus.version})` : 'Sin modelo publicado aún'}</p>{modelStatus?.metrics ? <p className="mt-1 text-xs text-slate-600">Macro F1 {modelStatus.metrics.macroF1.toFixed(2)} · recall mínimo {modelStatus.metrics.minimumClassRecall.toFixed(2)} · {modelStatus.metrics.testSamples} pruebas</p> : <p className="mt-1 text-xs text-slate-600">Las muestras aprobadas se usarán cuando el pipeline de entrenamiento publique un nuevo modelo.</p>}</div>{modelStatus?.available ? <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-600" /> : <Clock3 className="h-5 w-5 shrink-0 text-slate-400" />}</div>{publishNotice && <p className="mt-3 rounded-xl bg-white/70 p-3 text-xs font-bold text-emerald-900">{publishNotice}</p>}<button onClick={() => void publishModel()} disabled={publishSaving || !user} className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-700 px-4 py-3 text-sm font-black text-white disabled:opacity-50">{publishSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Rocket className="h-4 w-4" />}Publicar modelo LSD</button></div>
+
+      <section className="rounded-2xl border border-blue-200 bg-blue-50 p-4">
+        <div className="flex items-center justify-between gap-3"><div><h3 className="text-sm font-black text-blue-950">Palabras y frases propuestas</h3><p className="mt-1 text-xs text-blue-800">Al aprobar una propuesta aparecerá en el selector de grabación. Todavía necesitará una grabación aprobada antes de entrenar.</p></div><span className="rounded-full bg-white px-3 py-1 text-xs font-black text-blue-800">{labelProposals.filter((item) => item.status === 'pending').length} pendientes</span></div>
+        <div className="mt-3 space-y-2">{labelProposals.filter((item) => item.status === 'pending').length === 0 ? <p className="rounded-xl bg-white/70 p-3 text-xs text-blue-800">No hay propuestas pendientes.</p> : labelProposals.filter((item) => item.status === 'pending').map((proposal) => <div key={proposal.id} className="rounded-xl bg-white p-3"><div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-sm font-black text-slate-900">{proposal.display_name}</p><p className="mt-1 text-[11px] text-slate-500">{proposal.motion_type === 'two_hand' ? 'Dos manos' : proposal.motion_type === 'dynamic' ? 'Con movimiento' : 'Estática'} · {new Date(proposal.created_at).toLocaleDateString('es-DO')}</p></div><div className="flex gap-2"><button onClick={() => void reviewLabelProposal(proposal, 'rejected')} disabled={proposalReviewing === proposal.id} className="rounded-lg bg-rose-50 px-3 py-2 text-xs font-black text-rose-700 disabled:opacity-50">Rechazar</button><button onClick={() => void reviewLabelProposal(proposal, 'approved')} disabled={proposalReviewing === proposal.id} className="rounded-lg bg-blue-700 px-3 py-2 text-xs font-black text-white disabled:opacity-50">{proposalReviewing === proposal.id ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Aprobar'}</button></div></div></div>)}</div>
+      </section>
 
       <details className="rounded-2xl border border-violet-200 bg-violet-50 p-4">
         <summary className="flex cursor-pointer list-none items-center gap-2 text-sm font-black text-violet-950"><SlidersHorizontal className="h-5 w-5" />Reglas de entrenamiento</summary>

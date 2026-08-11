@@ -34,6 +34,8 @@ Las grabaciones aprobadas en el panel administrativo no cambian el lector en tie
 4. El workflow de GitHub Actions entrena un nuevo modelo TensorFlow.js y publica los artefactos en `public/models/lsd/`.
 5. La app solo empieza a usar ese nuevo modelo cuando el manifiesto `public/models/lsd/manifest.json` cambia a `available: true`.
 
+Las personas también pueden proponer palabras o frases que todavía no estén en el selector. La propuesta queda en `sign_label_proposals`; un administrador debe aprobarla antes de que se convierta en una etiqueta LSD disponible para grabar. Aprobar el texto no entrena por sí solo: después se necesita al menos una grabación aprobada que cumpla las reglas configuradas.
+
 Si el manifiesto sigue en `available: false` o `version: "collecting-data"`, las muestras aprobadas aún no están activas en la app. La forma más simple es ejecutar este comando localmente después de definir las variables de entorno necesarias:
 
 ```bash
