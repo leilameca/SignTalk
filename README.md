@@ -9,6 +9,7 @@ Producción: [signtalk-express.leilanycristaldedios.workers.dev](https://signtal
 - Cámara frontal o trasera mediante `navigator.mediaDevices.getUserMedia`.
 - Seguimiento de hasta dos manos con MediaPipe Hand Landmarker.
 - Traducción continua local y retroalimentación de confianza.
+- Modos separados para señas y dactilología del abecedario LSD (A–Z, incluida Ñ).
 - Selector de variante LSD o ASL guardado en las preferencias del usuario.
 - Autenticación con Email/Contraseña y Google OAuth mediante Supabase.
 - Confirmación de correo, recuperación de contraseña y cierre obligatorio a las 48 horas.
@@ -19,6 +20,15 @@ Producción: [signtalk-express.leilanycristaldedios.workers.dev](https://signtal
 - Entrenamiento automático con GitHub Actions y despliegue en Cloudflare Workers.
 
 El análisis con Gemini es opcional y está deshabilitado en la interfaz pública mientras se prioriza la inferencia local de baja latencia.
+
+## Reglas locales LSD
+
+Las reglas de respaldo se basan en el [Diccionario Oficial de Lengua de Señas Dominicana](https://diccionariolsrd.cc/), elaborado por CONADIS, MINERD y ANSORDO. El traductor separa **Señas LSD** de **Abecedario LSD** para evitar que una postura compartida se interprete simultáneamente como palabra, número y letra.
+
+- En modo señas, el modelo entrenado tiene prioridad; las reglas temporales oficiales funcionan como respaldo para movimientos básicos como `No`, `Hola`, `Gracias`, `Arriba` y `Abajo`.
+- En modo abecedario se reconocen las 27 letras, incluida `Ñ`; `J`, `Ñ` y `Z` requieren movimiento.
+- Las formas de puño visualmente parecidas se publican con menor confianza y exigen estabilidad antes de agregarse.
+- Las reglas provisionales que no coinciden con una descripción oficial LSD no se presentan como dominicanas.
 
 ## Tecnologías
 

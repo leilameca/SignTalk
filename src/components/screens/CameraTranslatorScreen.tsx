@@ -5,7 +5,7 @@ import { useApp } from '../../context/AppContext';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
 import { triggerHaptic } from '../../utils/haptics';
-import { classifyLocalSign, classifyLocalSignSequence, type LocalSignFrame, type LocalSignPrediction } from '../../utils/localSignClassifier';
+import { classifyLocalSign, classifyLocalSignSequence, classifyLsdAlphabet, classifyLsdAlphabetSequence, type LocalSignFrame, type LocalSignPrediction } from '../../utils/localSignClassifier';
 import { loadLsdModel, predictLsdSequence, type LsdLoadedModel, type LsdSequenceFrame } from '../../utils/lsdModel';
 
 const HAND_CONNECTIONS = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
@@ -48,6 +48,7 @@ export const CameraTranslatorScreen: React.FC = () => {
   const [serviceNotice, setServiceNotice] = useState('');
   const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
   const [continuousMode, setContinuousMode] = useState(() => localStorage.getItem('signtalk_continuous_translation') !== 'false');
+  const [recognitionMode, setRecognitionMode] = useState<'signs' | 'alphabet'>(() => localStorage.getItem('signtalk_recognition_mode') === 'alphabet' ? 'alphabet' : 'signs');
   const [lsdModelStatus, setLsdModelStatus] = useState<'loading' | 'ready' | 'collecting' | 'inactive'>('loading');
   const [lsdModelVersion, setLsdModelVersion] = useState('');
   const [lsdModelExperimental, setLsdModelExperimental] = useState(false);
@@ -55,6 +56,15 @@ export const CameraTranslatorScreen: React.FC = () => {
   useEffect(() => {
     localStorage.setItem('signtalk_continuous_translation', String(continuousMode));
   }, [continuousMode]);
+
+  useEffect(() => {
+    localStorage.setItem('signtalk_recognition_mode', recognitionMode);
+    lsdFramesRef.current = [];
+    lsdSamplesRef.current = [];
+    localFramesRef.current = [];
+    localSamplesRef.current = [];
+    setLocalPrediction(null);
+  }, [recognitionMode]);
 
   useEffect(() => {
     let active = true;
@@ -198,7 +208,7 @@ export const CameraTranslatorScreen: React.FC = () => {
         landmarksRef.current = result.landmarks;
         setHasVisibleHand(result.landmarks.length > 0);
         drawLandmarks(result.landmarks);
-        if (settings.signLanguageVariant === 'LSD' && timestamp - lastLsdFrameRef.current >= 66) {
+        if (settings.signLanguageVariant === 'LSD' && recognitionMode === 'signs' && timestamp - lastLsdFrameRef.current >= 66) {
           lastLsdFrameRef.current = timestamp;
           if (result.landmarks.length) {
             lsdNeutralSinceRef.current = null;
@@ -215,19 +225,23 @@ export const CameraTranslatorScreen: React.FC = () => {
             lsdInferenceRunningRef.current = true;
             const sequence = [...lsdFramesRef.current];
             void predictLsdSequence(loadedModel, sequence).then((modelPrediction) => {
-              if (!modelPrediction) {
+              const fallbackFrames: LocalSignFrame[] = sequence.flatMap((frame, index) => frame.hands[0]?.length >= 21 ? [{ hand: frame.hands[0], timestamp: index * 66 }] : []);
+              const fallback = (!modelPrediction?.accepted || modelPrediction.code === 'none') && fallbackFrames.length
+                ? classifyLocalSignSequence(fallbackFrames, 'LSD') || classifyLocalSign(fallbackFrames[fallbackFrames.length - 1].hand, 'LSD')
+                : null;
+              if (!modelPrediction && !fallback) {
                 lsdSamplesRef.current = [];
                 return;
               }
-              const prediction: LocalSignPrediction = {
-                label: modelPrediction.label,
-                confidence: modelPrediction.confidence,
-                detail: modelPrediction.accepted
-                  ? `Modelo LSD ${modelPrediction.version}`
-                  : `Candidato LSD · necesita ${Math.round(modelPrediction.threshold * 100)}%`,
+              const prediction: LocalSignPrediction = fallback || {
+                label: modelPrediction!.label,
+                confidence: modelPrediction!.confidence,
+                detail: modelPrediction!.accepted
+                  ? `Modelo LSD ${modelPrediction!.version}`
+                  : `Candidato LSD · necesita ${Math.round(modelPrediction!.threshold * 100)}%`,
               };
               setLocalPrediction(prediction);
-              if (!modelPrediction.accepted || modelPrediction.code === 'none') {
+              if (!fallback && (!modelPrediction!.accepted || modelPrediction!.code === 'none')) {
                 lsdSamplesRef.current = [];
                 setDetection({ confidence: prediction.confidence, handDetails: `${prediction.detail} · Observando movimiento` });
                 return;
@@ -266,9 +280,13 @@ export const CameraTranslatorScreen: React.FC = () => {
             neutralSinceRef.current ??= timestamp;
             if (timestamp - neutralSinceRef.current >= 550) lastAutoAddedRef.current = null;
           }
-          const prediction = lsdModelRef.current ? null : visibleHand
-            ? classifyLocalSignSequence(localFramesRef.current, settings.signLanguageVariant)
-              || classifyLocalSign(visibleHand, settings.signLanguageVariant)
+          const prediction = visibleHand
+            ? recognitionMode === 'alphabet' && settings.signLanguageVariant === 'LSD'
+              ? classifyLsdAlphabetSequence(localFramesRef.current) || classifyLsdAlphabet(visibleHand)
+              : lsdModelRef.current
+                ? null
+                : classifyLocalSignSequence(localFramesRef.current, settings.signLanguageVariant)
+                  || classifyLocalSign(visibleHand, settings.signLanguageVariant)
             : null;
           if (!prediction) {
             localSamplesRef.current = [];
@@ -285,7 +303,8 @@ export const CameraTranslatorScreen: React.FC = () => {
               const lastAdded = lastAutoAddedRef.current;
               const isNewTerm = !lastAdded || lastAdded.label !== stablePrediction.label;
               const enoughTimePassed = !lastAdded || timestamp - lastAdded.timestamp >= 1100;
-              if (continuousMode && stablePrediction.confidence >= 0.8 && isNewTerm && enoughTimePassed) {
+              const minimumLocalConfidence = recognitionMode === 'alphabet' ? 0.74 : 0.8;
+              if (continuousMode && stablePrediction.confidence >= minimumLocalConfidence && isNewTerm && enoughTimePassed) {
                 addWordToSentence(stablePrediction.label);
                 lastAutoAddedRef.current = { label: stablePrediction.label, timestamp };
                 setDetection({ confidence: stablePrediction.confidence, handDetails: `${stablePrediction.detail} · Captura continua ${settings.signLanguageVariant}` });
@@ -302,7 +321,7 @@ export const CameraTranslatorScreen: React.FC = () => {
     };
     animationRef.current = requestAnimationFrame(detect);
     return () => cancelAnimationFrame(animationRef.current);
-  }, [cameraState, trackingReady, isCapturing, settings.cameraFPS, settings.signLanguageVariant, continuousMode, drawLandmarks, setDetection]);
+  }, [cameraState, trackingReady, isCapturing, settings.cameraFPS, settings.signLanguageVariant, continuousMode, recognitionMode, drawLandmarks, setDetection]);
 
   useEffect(() => {
     if (cooldownRemainingMs <= 0) return;
@@ -402,6 +421,10 @@ export const CameraTranslatorScreen: React.FC = () => {
             <button onClick={() => setFacingMode((current) => current === 'environment' ? 'user' : 'environment')} disabled={cameraState === 'starting' || analyzing} className="absolute right-3 bottom-3 rounded-xl bg-white/90 px-3 py-2 text-xs font-black text-slate-900 backdrop-blur disabled:opacity-50 sm:right-4 sm:bottom-4 sm:px-4" title="Cambiar cámara"><SwitchCamera className="mr-1 inline h-4 w-4 sm:mr-1.5" />{facingMode === 'environment' ? 'Trasera' : 'Frontal'}</button>
           </div>
           <div className="mt-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+            {settings.signLanguageVariant === 'LSD' && <div className="mb-3 grid grid-cols-2 gap-2 rounded-xl bg-slate-100 p-1" role="radiogroup" aria-label="Modo de reconocimiento LSD">
+              <button type="button" role="radio" aria-checked={recognitionMode === 'signs'} onClick={() => setRecognitionMode('signs')} className={`rounded-lg px-3 py-2 text-xs font-black transition-colors ${recognitionMode === 'signs' ? 'bg-white text-emerald-700 shadow-sm' : 'text-slate-600'}`}>Señas LSD</button>
+              <button type="button" role="radio" aria-checked={recognitionMode === 'alphabet'} onClick={() => setRecognitionMode('alphabet')} className={`rounded-lg px-3 py-2 text-xs font-black transition-colors ${recognitionMode === 'alphabet' ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-600'}`}>Abecedario LSD</button>
+            </div>}
             <div className="mb-4 flex items-center justify-between gap-3 rounded-xl bg-emerald-50 px-3 py-2.5">
               <div>
                 <p className="text-xs font-black text-emerald-900">Traducción continua</p>
@@ -414,7 +437,7 @@ export const CameraTranslatorScreen: React.FC = () => {
             <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
               <div className="min-w-0">
                 <p className="flex items-center gap-1.5 text-xs font-black uppercase tracking-wider text-slate-500"><Smartphone className="h-4 w-4 text-emerald-600" />Detección local</p>
-                <p className="mt-1 text-sm font-bold text-slate-900">{localPrediction ? `${localPrediction.label} · ${localPrediction.detail}` : 'Mantén una seña simple estable frente a la cámara'}</p>
+                <p className="mt-1 text-sm font-bold text-slate-900">{localPrediction ? `${localPrediction.label} · ${localPrediction.detail}` : recognitionMode === 'alphabet' ? 'Mantén una letra LSD estable frente a la cámara' : 'Mantén una seña simple estable frente a la cámara'}</p>
                 {localPrediction && !hasVisibleHand && <p className="mt-1 text-xs font-semibold text-emerald-700">Resultado retenido: puedes bajar las manos sin perderlo.</p>}
               </div>
               {!continuousMode && <button onClick={useLocalPrediction} disabled={!localPrediction} className="shrink-0 rounded-xl bg-emerald-600 px-3 py-2 text-xs font-black text-white disabled:opacity-40">Usar</button>}
