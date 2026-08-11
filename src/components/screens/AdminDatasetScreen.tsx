@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { ArrowLeft, CheckCircle2, Clock3, Download, Loader2, Play, RefreshCw, Save, ShieldCheck, SlidersHorizontal, TriangleAlert, XCircle } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, Clock3, Download, Loader2, Play, RefreshCw, Rocket, Save, ShieldCheck, SlidersHorizontal, TriangleAlert, XCircle } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { useAuth } from '../../context/AuthContext';
 import { supabase } from '../../lib/supabase';
@@ -31,6 +31,20 @@ interface TrainingSettings {
   allow_experimental: boolean;
 }
 
+interface LsdModelManifestSummary {
+  available: boolean;
+  version: string;
+  variant: 'LSD';
+  labels: Array<{ code: string; displayName: string }>;
+  metrics: { macroF1: number; minimumClassRecall: number; testSamples: number } | null;
+  trainedAt: string | null;
+}
+
+interface LsdSignLabel {
+  code: string;
+  display_name: string;
+}
+
 const DEFAULT_TRAINING_SETTINGS: TrainingSettings = {
   variant: 'LSD', minimum_samples: 1, minimum_participants: 1,
   minimum_macro_f1: 0.70, minimum_class_recall: 0.45,
@@ -52,24 +66,47 @@ export const AdminDatasetScreen: React.FC = () => {
   const [videoError, setVideoError] = useState(false);
   const [saving, setSaving] = useState(false);
   const [trainingSaving, setTrainingSaving] = useState(false);
+  const [publishSaving, setPublishSaving] = useState(false);
+  const [publishNotice, setPublishNotice] = useState('');
   const [trainingSettings, setTrainingSettings] = useState<TrainingSettings>(DEFAULT_TRAINING_SETTINGS);
+  const [modelStatus, setModelStatus] = useState<LsdModelManifestSummary | null>(null);
+  const [signLabels, setSignLabels] = useState<LsdSignLabel[]>([]);
   const [error, setError] = useState('');
 
   const loadRecordings = useCallback(async () => {
     if (!isAdmin) return;
     setLoading(true);
     setError('');
-    const [recordingsResult, settingsResult] = await Promise.all([
+    const [recordingsResult, settingsResult, labelsResult] = await Promise.all([
       supabase.from('sign_recordings').select('id,participant_id,storage_path,duration_ms,frame_count,camera_facing,status,rejection_reason,reviewed_at,created_at,sign_labels(code,display_name,variant,motion_type),dataset_participants(pseudonym,dominant_hand,country_code)').order('created_at', { ascending: false }),
       supabase.from('model_training_settings').select('variant,minimum_samples,minimum_participants,minimum_macro_f1,minimum_class_recall,confidence_threshold,allow_experimental').eq('variant', 'LSD').single(),
+      supabase.from('sign_labels').select('code,display_name').eq('variant', 'LSD').eq('active', true).order('display_name'),
     ]);
     if (recordingsResult.error) setError('No se pudieron cargar las muestras. Verifica que la migración de administración esté aplicada.');
     else setRecordings((recordingsResult.data || []) as unknown as ReviewRecording[]);
     if (!settingsResult.error && settingsResult.data) setTrainingSettings(settingsResult.data as TrainingSettings);
+    if (!labelsResult.error) setSignLabels((labelsResult.data || []) as LsdSignLabel[]);
     setLoading(false);
   }, [isAdmin]);
 
   useEffect(() => { void loadRecordings(); }, [loadRecordings]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadManifest = () => fetch(`/models/lsd/manifest.json?check=${Date.now()}`, { cache: 'no-store' })
+      .then(async (response) => {
+        if (!response.ok) throw new Error('manifest unavailable');
+        const manifest = await response.json() as LsdModelManifestSummary;
+        if (!cancelled) setModelStatus(manifest);
+      })
+      .catch(() => undefined);
+    void loadManifest();
+    const manifestRefresh = window.setInterval(() => void loadManifest(), 30_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(manifestRefresh);
+    };
+  }, []);
 
   const openRecording = async (recording: ReviewRecording) => {
     setSelected(recording);
@@ -128,10 +165,35 @@ export const AdminDatasetScreen: React.FC = () => {
     setTrainingSaving(false);
   };
 
+  const publishModel = async () => {
+    if (!user) return;
+    setPublishSaving(true);
+    setError('');
+    setPublishNotice('');
+    try {
+      const response = await fetch('/api/admin/publish-lsd-model', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${await supabase.auth.getSession().then(({ data }) => data.session?.access_token || '')}`,
+        },
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload.success) throw new Error(payload.error || 'No se pudo disparar la publicación.');
+      setError('');
+      setPublishNotice(payload.alreadyRunning ? 'Ya existe un entrenamiento en curso.' : 'Entrenamiento enviado. El estado del modelo se actualizará automáticamente cuando termine.');
+      setModelStatus((current) => current ? { ...current, version: 'pending' } : current);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'No se pudo disparar la publicación.');
+    }
+    setPublishSaving(false);
+  };
+
   const counts = useMemo(() => recordings.reduce((result, item) => ({ ...result, [item.status]: result[item.status] + 1 }), { pending: 0, approved: 0, rejected: 0 }), [recordings]);
   const visible = useMemo(() => recordings.filter((item) => item.status === filter), [recordings, filter]);
   const trainingReadiness = useMemo(() => {
     const groups = new Map<string, { label: string; samples: number; participants: Set<string> }>();
+    signLabels.forEach((label) => groups.set(label.code, { label: label.display_name, samples: 0, participants: new Set<string>() }));
     recordings.filter((item) => item.status === 'approved').forEach((item) => {
       const code = item.sign_labels?.code || 'unknown';
       const current = groups.get(code) || { label: item.sign_labels?.display_name || code, samples: 0, participants: new Set<string>() };
@@ -140,7 +202,7 @@ export const AdminDatasetScreen: React.FC = () => {
       groups.set(code, current);
     });
     return [...groups.entries()].map(([code, value]) => ({ code, label: value.label, samples: value.samples, participants: value.participants.size, ready: value.samples >= trainingSettings.minimum_samples && value.participants.size >= trainingSettings.minimum_participants })).sort((a, b) => a.label.localeCompare(b.label));
-  }, [recordings, trainingSettings.minimum_samples, trainingSettings.minimum_participants]);
+  }, [recordings, signLabels, trainingSettings.minimum_samples, trainingSettings.minimum_participants]);
 
   if (adminLoading) return <div className="grid flex-1 place-items-center"><Loader2 className="h-8 w-8 animate-spin text-emerald-600" /></div>;
   if (!isAdmin) return <div className="mx-auto w-full max-w-lg p-6 text-center"><ShieldCheck className="mx-auto h-10 w-10 text-slate-400" /><h2 className="mt-3 text-lg font-black text-slate-900">Acceso administrativo requerido</h2><p className="mt-2 text-sm text-slate-600">Esta sección está protegida por Supabase.</p><button onClick={() => setActiveTab('settings')} className="mt-5 rounded-xl bg-slate-900 px-4 py-3 text-sm font-bold text-white">Volver a ajustes</button></div>;
@@ -154,6 +216,7 @@ export const AdminDatasetScreen: React.FC = () => {
 
       <div className="rounded-3xl border border-emerald-200 bg-emerald-50 p-5"><div className="flex items-center gap-3"><span className="rounded-2xl bg-emerald-600 p-3 text-white"><ShieldCheck className="h-6 w-6" /></span><div><h2 className="text-lg font-black text-slate-900">Revisión del dataset LSD</h2><p className="text-sm text-slate-600">Los videos permanecen privados y los enlaces de revisión vencen en 5 minutos.</p></div></div></div>
       <div className="flex items-start gap-2 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"><TriangleAlert className="mt-0.5 h-5 w-5 shrink-0" /><p><strong>Aprobar no entrena el lector inmediatamente.</strong> La muestra queda validada para el próximo entrenamiento; el traductor aprenderá esa seña cuando se genere, evalúe y publique una nueva versión del modelo LSD.</p></div>
+      <div className={`rounded-2xl border p-4 ${modelStatus?.available ? 'border-emerald-200 bg-emerald-50' : 'border-slate-200 bg-slate-50'}`}><div className="flex items-start justify-between gap-3"><div><p className="text-xs font-black uppercase tracking-wider text-slate-600">Estado del lector LSD</p><p className="mt-1 text-sm font-black text-slate-900">{modelStatus?.version === 'pending' ? 'Entrenamiento solicitado' : modelStatus?.available ? `Modelo publicado (${modelStatus.version})` : 'Sin modelo publicado aún'}</p>{modelStatus?.metrics ? <p className="mt-1 text-xs text-slate-600">Macro F1 {modelStatus.metrics.macroF1.toFixed(2)} · recall mínimo {modelStatus.metrics.minimumClassRecall.toFixed(2)} · {modelStatus.metrics.testSamples} pruebas</p> : <p className="mt-1 text-xs text-slate-600">Las muestras aprobadas se usarán cuando el pipeline de entrenamiento publique un nuevo modelo.</p>}</div>{modelStatus?.available ? <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-600" /> : <Clock3 className="h-5 w-5 shrink-0 text-slate-400" />}</div>{publishNotice && <p className="mt-3 rounded-xl bg-white/70 p-3 text-xs font-bold text-emerald-900">{publishNotice}</p>}<button onClick={() => void publishModel()} disabled={publishSaving || !user} className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-700 px-4 py-3 text-sm font-black text-white disabled:opacity-50">{publishSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Rocket className="h-4 w-4" />}Publicar modelo LSD</button></div>
 
       <details className="rounded-2xl border border-violet-200 bg-violet-50 p-4">
         <summary className="flex cursor-pointer list-none items-center gap-2 text-sm font-black text-violet-950"><SlidersHorizontal className="h-5 w-5" />Reglas de entrenamiento</summary>

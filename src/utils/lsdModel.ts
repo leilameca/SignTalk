@@ -35,7 +35,10 @@ export interface LsdModelPrediction {
   version: string;
 }
 
+let loadedModel: LoadedLsdModel | null = null;
 let modelPromise: Promise<LoadedLsdModel | null> | null = null;
+let lastManifestCheck = 0;
+const MODEL_RECHECK_MS = 60_000;
 
 const distance = (a: NormalizedLandmark, b: NormalizedLandmark) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
 
@@ -74,18 +77,23 @@ function encodeSequence(frames: LsdSequenceFrame[], manifest: LsdModelManifest):
   });
 }
 
-export async function loadLsdModel(): Promise<LoadedLsdModel | null> {
+export async function loadLsdModel(forceRefresh = false): Promise<LoadedLsdModel | null> {
+  if (!forceRefresh && loadedModel && Date.now() - lastManifestCheck < MODEL_RECHECK_MS) return loadedModel;
   if (modelPromise) return modelPromise;
   modelPromise = (async () => {
-    const response = await fetch('/models/lsd/manifest.json', { cache: 'no-store' });
+    lastManifestCheck = Date.now();
+    const response = await fetch(`/models/lsd/manifest.json?check=${lastManifestCheck}`, { cache: 'no-store' });
     if (!response.ok) return null;
     const manifest = await response.json() as LsdModelManifest;
     if (!manifest.available || !manifest.labels.length) return null;
+    if (loadedModel?.manifest.version === manifest.version) return loadedModel;
     const tf = await import('@tensorflow/tfjs');
     await tf.ready();
-    const model = await tf.loadLayersModel('/models/lsd/model.json');
-    return { manifest, model, tf };
-  })().catch(() => null);
+    const model = await tf.loadLayersModel(`/models/lsd/model.json?v=${encodeURIComponent(manifest.version)}`);
+    loadedModel?.model.dispose();
+    loadedModel = { manifest, model, tf };
+    return loadedModel;
+  })().catch(() => loadedModel).finally(() => { modelPromise = null; });
   return modelPromise;
 }
 

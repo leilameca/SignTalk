@@ -24,6 +24,26 @@ Vite monta el endpoint Express `/api/translate-sign` en desarrollo y vista previ
 
 En Cloudflare, `worker.ts` implementa el mismo endpoint y sirve los assets compilados según `wrangler.jsonc`. Publica con `npm run deploy:cloudflare` y configura `GEMINI_API_KEY` como secreto mediante `wrangler secret put GEMINI_API_KEY`.
 
+## Pipeline de entrenamiento LSD
+
+Las grabaciones aprobadas en el panel administrativo no cambian el lector en tiempo real. El flujo actual es:
+
+1. El usuario graba y sube muestras desde la app; quedan en Supabase con estado `pending`.
+2. El administrador aprueba o rechaza cada muestra desde el panel de administración.
+3. Solo las muestras con estado `approved` se exportan desde Supabase por el script de entrenamiento.
+4. El workflow de GitHub Actions entrena un nuevo modelo TensorFlow.js y publica los artefactos en `public/models/lsd/`.
+5. La app solo empieza a usar ese nuevo modelo cuando el manifiesto `public/models/lsd/manifest.json` cambia a `available: true`.
+
+Si el manifiesto sigue en `available: false` o `version: "collecting-data"`, las muestras aprobadas aún no están activas en la app. La forma más simple es ejecutar este comando localmente después de definir las variables de entorno necesarias:
+
+```bash
+npm run publish:lsd
+```
+
+Ese comando exporta las muestras `approved` desde Supabase, entrena un nuevo modelo LSD y lo publica en `public/models/lsd/`. Para que funcione, necesitas definir al menos `SUPABASE_URL` y `SUPABASE_SERVICE_ROLE_KEY`. Si además quieres desplegarlo automáticamente a Cloudflare, usa el workflow de GitHub Actions con los secretos `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_ANON_KEY`, `CLOUDFLARE_API_TOKEN` y `CLOUDFLARE_ACCOUNT_ID`.
+
+> Importante: guarda `GITHUB_TOKEN` únicamente como secreto del Worker (`wrangler secret put GITHUB_TOKEN`). Para un PAT fine-grained selecciona exclusivamente `leilameca/SignTalk` y concede **Actions: Read and write**; `Metadata: Read-only` se agrega automáticamente. Para un PAT clásico se necesita el alcance `repo`. Nunca coloques el token en `wrangler.jsonc`, `.env.local`, el frontend o Git.
+
 ## Seguridad y datos
 
 - La API valida el access token de Supabase antes de invocar Gemini.

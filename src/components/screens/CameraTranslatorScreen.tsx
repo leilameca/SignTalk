@@ -66,14 +66,22 @@ export const CameraTranslatorScreen: React.FC = () => {
       return;
     }
     setLsdModelStatus('loading');
-    void loadLsdModel().then((loaded) => {
+    const applyLoadedModel = (loaded: LsdLoadedModel) => {
       if (!active) return;
+      if (loaded?.manifest.version !== lsdModelRef.current?.manifest.version) {
+        lsdFramesRef.current = [];
+        lsdSamplesRef.current = [];
+      }
       lsdModelRef.current = loaded;
       setLsdModelVersion(loaded?.manifest.version || '');
       setLsdModelExperimental(Boolean(loaded?.manifest.experimental));
       setLsdModelStatus(loaded ? 'ready' : 'collecting');
-    });
-    return () => { active = false; };
+    };
+    void loadLsdModel().then(applyLoadedModel);
+    const modelRefresh = window.setInterval(() => {
+      void loadLsdModel(true).then(applyLoadedModel);
+    }, 60_000);
+    return () => { active = false; window.clearInterval(modelRefresh); };
   }, [settings.signLanguageVariant]);
 
   const drawLandmarks = useCallback((hands: NormalizedLandmark[][]) => {

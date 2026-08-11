@@ -16,6 +16,7 @@
   "vars": {
     "SUPABASE_URL": "https://iplrstsygezbbsaojjyp.supabase.co",
     "SUPABASE_ANON_KEY": "sb_publishable_Vt1sQyxiqxqUBKxq8F5qIg_a9lNt_zK",
+    "GITHUB_REPOSITORY": "leilameca/SignTalk",
     "GEMINI_MODEL": "gemini-3.6-flash",
     "GEMINI_ANALYSIS_ENABLED": "false"
   }

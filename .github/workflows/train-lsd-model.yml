@@ -2,6 +2,12 @@ name: Entrenar y publicar modelo LSD
 
 on:
   workflow_dispatch:
+    inputs:
+      triggerSource:
+        description: Origen de la solicitud de entrenamiento
+        required: false
+        default: manual
+        type: string
   schedule:
     - cron: '0 8 * * 1'
 
@@ -18,10 +24,10 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: Descargar código
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Configurar Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
           cache: pip
@@ -46,7 +52,7 @@ jobs:
         run: python training/train.py
 
       - name: Configurar Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: '22'
           cache: npm

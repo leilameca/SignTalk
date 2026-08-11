@@ -2,6 +2,8 @@
 
 Este proceso usa exclusivamente secuencias de landmarks aprobadas. Los videos privados no se descargan para entrenar la primera versión.
 
+Importante: aprobar una muestra en el panel administrativo no cambia el lector inmediatamente. La muestra solo se incorpora al próximo entrenamiento cuando el pipeline exporta `sign_recordings` con `status = approved` y publica un nuevo modelo en `public/models/lsd/`.
+
 ## Protección de calidad
 
 Las reglas se leen desde Supabase y se pueden editar en **Panel de administración → Reglas de entrenamiento**. El valor inicial es 1 muestra de 1 participante por seña.
@@ -31,6 +33,14 @@ npm run build
 ```
 
 Nunca guardes `SUPABASE_SERVICE_ROLE_KEY` en `.env.local`, el código frontend ni Git.
+
+Para publicar las muestras aprobadas de la forma más simple, desde la raíz del proyecto ejecuta:
+
+```bash
+npm run publish:lsd
+```
+
+Ese comando corre `training/export_dataset.py` y `training/train.py` de una vez, usando las muestras aprobadas para generar un nuevo modelo LSD en `public/models/lsd/`.
 
 ## Automatización
 

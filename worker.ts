@@ -1,4 +1,12 @@
-type WorkerEnv = Cloudflare.Env & { GEMINI_API_KEY?: string };
+type WorkerEnv = Cloudflare.Env & {
+  GEMINI_API_KEY?: string;
+  GITHUB_TOKEN?: string;
+  GITHUB_REPOSITORY?: string;
+  SUPABASE_URL?: string;
+  SUPABASE_ANON_KEY?: string;
+  GEMINI_ANALYSIS_ENABLED?: string;
+  GEMINI_MODEL?: string;
+};
 
 interface GeminiResponse {
   candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
@@ -33,6 +41,64 @@ function secureResponse(response: Response): Response {
   secured.headers.set('x-frame-options', 'DENY');
   secured.headers.set('strict-transport-security', 'max-age=31536000; includeSubDomains');
   return secured;
+}
+
+async function publishModel(request: Request, env: WorkerEnv): Promise<Response> {
+  if (!env.GITHUB_TOKEN || !env.GITHUB_REPOSITORY) {
+    return json({ success: false, error: 'Falta configurar GITHUB_TOKEN o GITHUB_REPOSITORY en el Worker.' }, 503);
+  }
+  const authorization = request.headers.get('authorization');
+  if (!authorization?.startsWith('Bearer ')) return json({ success: false, error: 'Sesión requerida.' }, 401);
+  if (!env.SUPABASE_URL || !env.SUPABASE_ANON_KEY) return json({ success: false, error: 'Supabase no está configurado.' }, 503);
+
+  const authResponse = await fetch(`${env.SUPABASE_URL}/auth/v1/user`, { headers: { authorization, apikey: env.SUPABASE_ANON_KEY || '' } });
+  if (!authResponse.ok) return json({ success: false, error: 'Sesión inválida o expirada.' }, 401);
+
+  const githubHeaders = {
+    'Accept': 'application/vnd.github+json',
+    'Authorization': `Bearer ${env.GITHUB_TOKEN}`,
+    'X-GitHub-Api-Version': '2022-11-28',
+    'User-Agent': 'SignTalk-Admin-Publish/1.0',
+  };
+  const adminResponse = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/is_app_admin`, {
+    method: 'POST',
+    headers: {
+      authorization,
+      apikey: env.SUPABASE_ANON_KEY,
+      'content-type': 'application/json',
+    },
+    body: '{}',
+  });
+  const isAdmin = adminResponse.ok ? await adminResponse.json() : false;
+  if (isAdmin !== true) return json({ success: false, error: 'Acceso administrativo requerido.' }, 403);
+
+  const runsResponse = await fetch(`https://api.github.com/repos/${env.GITHUB_REPOSITORY}/actions/workflows/train-lsd-model.yml/runs?per_page=5`, { headers: githubHeaders });
+  if (runsResponse.ok) {
+    const runs = await runsResponse.json() as { workflow_runs?: Array<{ status?: string; html_url?: string }> };
+    const activeRun = runs.workflow_runs?.find((run) => run.status === 'queued' || run.status === 'in_progress');
+    if (activeRun) return json({ success: true, alreadyRunning: true, message: 'Ya existe un entrenamiento en curso.', runUrl: activeRun.html_url }, 202);
+  }
+
+  const response = await fetch(`https://api.github.com/repos/${env.GITHUB_REPOSITORY}/actions/workflows/train-lsd-model.yml/dispatches`, {
+    method: 'POST',
+    headers: {
+      ...githubHeaders,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ ref: 'main', inputs: { triggerSource: 'admin-panel' } }),
+  });
+
+  if (!response.ok) {
+    console.error('GitHub workflow dispatch failed:', response.status, response.headers.get('x-github-request-id'));
+    const error = response.status === 401 ? 'El token de GitHub no es válido.'
+      : response.status === 403 ? 'El token de GitHub necesita permiso Actions: write.'
+        : response.status === 404 ? 'GitHub no encontró el repositorio o el workflow.'
+          : response.status === 422 ? 'La configuración del workflow todavía no coincide con la solicitud.'
+            : 'GitHub no pudo iniciar el entrenamiento.';
+    return json({ success: false, error }, 502);
+  }
+
+  return json({ success: true, message: 'Entrenamiento enviado a GitHub Actions.' }, 202);
 }
 
 async function translate(request: Request, env: WorkerEnv): Promise<Response> {
@@ -81,6 +147,10 @@ export default {
     const url = new URL(request.url);
     if (url.pathname === '/api/translate-sign' && request.method === 'POST') {
       try { return secureResponse(await translate(request, env)); }
+      catch { return secureResponse(json({ success: false, error: 'Error interno.' }, 500)); }
+    }
+    if (url.pathname === '/api/admin/publish-lsd-model' && request.method === 'POST') {
+      try { return secureResponse(await publishModel(request, env)); }
       catch { return secureResponse(json({ success: false, error: 'Error interno.' }, 500)); }
     }
     return secureResponse(await env.ASSETS.fetch(request));

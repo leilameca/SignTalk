@@ -25,6 +25,56 @@ Analiza la estructura esquelética y los fotogramas de la mano.
 Traduce el significado de la seña en ASL a texto claro en español.`,
 } as const;
 
+app.post('/api/admin/publish-lsd-model', async (req, res) => {
+  try {
+    const token = req.headers.authorization?.replace(/^Bearer\s+/i, '');
+    if (!token) return res.status(401).json({ success: false, error: 'Sesión requerida.' });
+
+    const { data: authData, error: authError } = await authClient?.auth.getUser(token) ?? { data: null, error: new Error('Supabase no configurado') };
+    if (authError || !authData?.user) return res.status(401).json({ success: false, error: 'Sesión inválida o expirada.' });
+
+    const adminClient = createClient(supabaseUrl!, supabaseAnonKey!, {
+      global: { headers: { Authorization: `Bearer ${token}` } },
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+    const { data: isAdmin, error: adminError } = await adminClient.rpc('is_app_admin');
+    if (adminError || isAdmin !== true) return res.status(403).json({ success: false, error: 'Acceso administrativo requerido.' });
+
+    const githubToken = process.env.GITHUB_TOKEN;
+    const repo = process.env.GITHUB_REPOSITORY;
+    if (!githubToken || !repo) {
+      return res.status(503).json({ success: false, error: 'Falta configurar GITHUB_TOKEN y GITHUB_REPOSITORY en el entorno del servidor para disparar el workflow.' });
+    }
+
+    const workflowUrl = `https://api.github.com/repos/${repo}/actions/workflows/train-lsd-model.yml/dispatches`;
+    const response = await fetch(workflowUrl, {
+      method: 'POST',
+      headers: {
+        'Accept': 'application/vnd.github+json',
+        'Authorization': `Bearer ${githubToken}`,
+        'X-GitHub-Api-Version': '2022-11-28',
+        'User-Agent': 'SignTalk-Admin-Publish/1.0',
+      },
+      body: JSON.stringify({ ref: 'main', inputs: { triggerSource: 'admin-panel' } }),
+    });
+
+    if (!response.ok) {
+      console.error('GitHub workflow dispatch failed:', response.status, response.headers.get('x-github-request-id'));
+      const error = response.status === 401 ? 'El token de GitHub no es válido.'
+        : response.status === 403 ? 'El token de GitHub necesita permiso Actions: write.'
+          : response.status === 404 ? 'GitHub no encontró el repositorio o el workflow.'
+            : response.status === 422 ? 'La configuración del workflow todavía no coincide con la solicitud.'
+              : 'GitHub no pudo iniciar el entrenamiento.';
+      return res.status(502).json({ success: false, error });
+    }
+
+    return res.status(202).json({ success: true, message: 'Entrenamiento enviado a GitHub Actions.' });
+  } catch (cause) {
+    console.error('Publish LSD model error:', cause);
+    return res.status(500).json({ success: false, error: cause instanceof Error ? cause.message : 'Publish error' });
+  }
+});
+
 app.post('/api/translate-sign', async (req, res) => {
   try {
     if (process.env.VITE_ENABLE_GEMINI_ANALYSIS !== 'true') return res.status(404).json({ success: false, error: 'Recurso no disponible.' });
