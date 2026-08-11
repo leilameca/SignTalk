@@ -1,11 +1,38 @@
 {
-  "available": false,
-  "version": "collecting-data",
+  "available": true,
+  "version": "20260811T182807Z",
   "variant": "LSD",
   "sequenceLength": 48,
   "featureCount": 128,
   "confidenceThreshold": 0.82,
-  "labels": [],
-  "metrics": null,
-  "trainedAt": null
+  "experimental": true,
+  "evaluationMode": "experimental-resubstitution",
+  "labels": [
+    {
+      "code": "gracias",
+      "displayName": "Gracias"
+    },
+    {
+      "code": "hola",
+      "displayName": "Hola"
+    },
+    {
+      "code": "no",
+      "displayName": "No"
+    },
+    {
+      "code": "none",
+      "displayName": "Ninguna / movimiento neutral"
+    },
+    {
+      "code": "si",
+      "displayName": "Sí"
+    }
+  ],
+  "metrics": {
+    "macroF1": 1.0,
+    "minimumClassRecall": 1.0,
+    "testSamples": 8
+  },
+  "trainedAt": "2026-08-11T18:28:07.466640+00:00"
 }
