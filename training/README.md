@@ -54,6 +54,8 @@ El workflow `.github/workflows/train-lsd-model.yml` se puede ejecutar manualment
 
 Si no hay datos suficientes o el candidato no supera la evaluación, el workflow falla antes del despliegue y la aplicación conserva el modelo anterior.
 
+Cuando el candidato supera las reglas, el workflow lo despliega en Cloudflare y guarda automáticamente los artefactos de `public/models/lsd/` en la rama `main`. Para ello, el workflow declara `contents: write`, pero el paso de persistencia solo agrega esa carpeta al commit de `github-actions[bot]`.
+
 ## Archivos publicados
 
 Un entrenamiento aprobado genera:
@@ -63,4 +65,4 @@ Un entrenamiento aprobado genera:
 - `public/models/lsd/manifest.json`
 - `public/models/lsd/evaluation.json`
 
-SignTalk consulta el manifiesto al iniciar. Si `available` es `false`, mantiene el clasificador geométrico; si es `true`, carga TensorFlow.js de manera diferida y usa el modelo temporal.
+SignTalk consulta el manifiesto al iniciar y vuelve a comprobarlo periódicamente. Si `available` es `false`, mantiene el clasificador geométrico; si es `true`, carga TensorFlow.js de manera diferida. El panel administrativo revisa la versión cada 30 segundos y la cámara cada 60 segundos, por lo que una pestaña abierta adopta el modelo nuevo sin reinstalar la aplicación.
