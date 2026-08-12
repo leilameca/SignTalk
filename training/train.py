@@ -172,4 +172,17 @@ if __name__ == "__main__":
     parser.add_argument("--minimum-f1", type=float)
     parser.add_argument("--minimum-recall", type=float)
     parser.add_argument("--seed", type=int, default=20260810)
-    main(parser.parse_args())
+    try:
+        main(parser.parse_args())
+    except (SystemExit, ValueError) as error:
+        message = str(error).lower()
+        category = "experimental-disabled" if "modo experimental" in message \
+            else "coverage" if "cobertura insuficiente" in message \
+            else "participant-split" if "división" in message \
+            else "quality-gate" if "rechazado por calidad" in message \
+            else "data-validation"
+        print(f"::error title=LSD training failed::category={category}; type={type(error).__name__}")
+        raise SystemExit(1) from None
+    except Exception as error:
+        print(f"::error title=LSD training failed::category=runtime; type={type(error).__name__}")
+        raise SystemExit(1) from None
