@@ -105,40 +105,42 @@ def main() -> int:
         )
         enriched_count = 0
         hand_only_count = 0
-        with vision.PoseLandmarker.create_from_options(options) as landmarker:
-            CURRENT_STAGE = "recording-processing"
-            for index, recording in enumerate(pending, start=1):
-                storage_path = str(recording.get("storage_path") or "")
-                extension = Path(storage_path).suffix or ".webm"
-                video_path = temporary_path / f"recording-{index}{extension}"
-                object_url = f"{supabase_url}/storage/v1/object/sign-dataset/{quote(storage_path, safe='/')}"
-                CURRENT_STAGE = "recording-download"
-                video_response = requests.get(object_url, headers=headers, timeout=120)
-                if not video_response.ok:
-                    print(f"AVISO: una grabación no pudo descargarse ({video_response.status_code}); conserva sus manos.")
-                    hand_only_count += 1
-                    continue
-                video_path.write_bytes(video_response.content)
-                CURRENT_STAGE = "pose-extraction"
+        CURRENT_STAGE = "recording-processing"
+        for index, recording in enumerate(pending, start=1):
+            storage_path = str(recording.get("storage_path") or "")
+            extension = Path(storage_path).suffix or ".webm"
+            video_path = temporary_path / f"recording-{index}{extension}"
+            object_url = f"{supabase_url}/storage/v1/object/sign-dataset/{quote(storage_path, safe='/')}"
+            CURRENT_STAGE = "recording-download"
+            video_response = requests.get(object_url, headers=headers, timeout=120)
+            if not video_response.ok:
+                print(f"AVISO: una grabación no pudo descargarse ({video_response.status_code}); conserva sus manos.")
+                hand_only_count += 1
+                continue
+            video_path.write_bytes(video_response.content)
+            CURRENT_STAGE = "pose-extraction"
+            # VIDEO mode requires monotonically increasing timestamps. A fresh
+            # task per clip also prevents tracking state leaking across people.
+            with vision.PoseLandmarker.create_from_options(options) as landmarker:
                 sequence, body_frames = enrich_sequence(video_path, recording.get("landmark_sequence") or [], landmarker)
-                if body_frames < 8:
-                    print("AVISO: una grabación no muestra suficiente torso; seguirá aportando sus manos.")
-                    hand_only_count += 1
-                    video_path.unlink(missing_ok=True)
-                    continue
-                CURRENT_STAGE = "database-update"
-                update = requests.patch(
-                    f"{supabase_url}/rest/v1/sign_recordings",
-                    params={"id": f"eq.{recording['id']}"},
-                    headers={**headers, "Content-Type": "application/json", "Prefer": "return=minimal"},
-                    json={"landmark_sequence": sequence},
-                    timeout=60,
-                )
-                update.raise_for_status()
-                enriched_count += 1
+            if body_frames < 8:
+                print("AVISO: una grabación no muestra suficiente torso; seguirá aportando sus manos.")
+                hand_only_count += 1
                 video_path.unlink(missing_ok=True)
-                print(f"Grabación enriquecida: {body_frames} fotogramas corporales.")
-                CURRENT_STAGE = "recording-processing"
+                continue
+            CURRENT_STAGE = "database-update"
+            update = requests.patch(
+                f"{supabase_url}/rest/v1/sign_recordings",
+                params={"id": f"eq.{recording['id']}"},
+                headers={**headers, "Content-Type": "application/json", "Prefer": "return=minimal"},
+                json={"landmark_sequence": sequence},
+                timeout=60,
+            )
+            update.raise_for_status()
+            enriched_count += 1
+            video_path.unlink(missing_ok=True)
+            print(f"Grabación enriquecida: {body_frames} fotogramas corporales.")
+            CURRENT_STAGE = "recording-processing"
     print(f"Migración corporal: {enriched_count} enriquecidas, {hand_only_count} conservadas con manos, {len(recordings) - len(pending)} ya estaban listas.")
     return 0
 
