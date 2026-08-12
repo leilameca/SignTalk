@@ -17,6 +17,7 @@ def main() -> int:
         return 1
 
     steps = [
+        [sys.executable, str(root / "training" / "backfill_body_landmarks.py")],
         [sys.executable, str(root / "training" / "export_dataset.py")],
         [sys.executable, str(root / "training" / "train.py")],
     ]

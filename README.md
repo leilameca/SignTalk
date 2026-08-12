@@ -1,6 +1,6 @@
 # SignTalk
 
-SignTalk es una aplicación web responsiva para apoyar la comunicación mediante Lengua de Señas Dominicana (LSD) y American Sign Language (ASL). Usa la cámara real, MediaPipe Hands y un modelo TensorFlow.js entrenado con aportes revisados por administradores.
+SignTalk es una aplicación web responsiva para apoyar la comunicación mediante Lengua de Señas Dominicana (LSD) y American Sign Language (ASL). Usa la cámara real, MediaPipe Hands/Pose y un modelo TensorFlow.js entrenado con aportes revisados por administradores.
 
 Producción: [signtalk-express.leilanycristaldedios.workers.dev](https://signtalk-express.leilanycristaldedios.workers.dev)
 
@@ -8,6 +8,7 @@ Producción: [signtalk-express.leilanycristaldedios.workers.dev](https://signtal
 
 - Cámara frontal o trasera mediante `navigator.mediaDevices.getUserMedia`.
 - Seguimiento de hasta dos manos con MediaPipe Hand Landmarker.
+- Contexto corporal con MediaPipe Pose: cabeza, hombros, codos y torso, más cuello y pecho derivados.
 - Traducción continua local y retroalimentación de confianza.
 - Modos separados para señas y dactilología del abecedario LSD (A–Z, incluida Ñ).
 - Selector de variante LSD o ASL guardado en las preferencias del usuario.
@@ -112,6 +113,7 @@ La clave `SUPABASE_SERVICE_ROLE_KEY` puede omitir RLS. Solo debe existir como se
 4. La grabación queda `pending`.
 5. Un administrador reproduce el video y lo aprueba o rechaza.
 6. Solo las grabaciones `approved` se exportan para entrenar.
+7. Los videos antiguos sin pose se reprocesan desde el bucket privado para agregar contexto corporal sin descartar sus manos.
 
 Si la conexión falla, la grabación queda temporalmente en IndexedDB y se sincroniza al recuperar Internet.
 
@@ -141,13 +143,16 @@ El administrador puede pulsar **Publicar modelo LSD**. El Worker:
 
 El workflow:
 
-1. exporta de Supabase exclusivamente landmarks de grabaciones LSD aprobadas;
-2. valida cobertura, participantes y la clase neutral `none`;
-3. entrena y evalúa el modelo GRU;
-4. convierte el resultado a TensorFlow.js;
-5. compila la aplicación;
-6. despliega aplicación y modelo en Cloudflare;
-7. guarda los artefactos aprobados en `main` mediante `github-actions[bot]`.
+1. recupera los videos existentes que todavía no tengan pose y los enriquece de forma privada;
+2. exporta de Supabase exclusivamente landmarks de grabaciones LSD aprobadas;
+3. valida cobertura, participantes y la clase neutral `none`;
+4. entrena y evalúa el modelo GRU;
+5. convierte el resultado a TensorFlow.js;
+6. compila la aplicación;
+7. despliega aplicación y modelo en Cloudflare;
+8. guarda los artefactos aprobados en `main` mediante `github-actions[bot]`.
+
+`training/backfill_body_landmarks.py` conserva todas las secuencias de manos anteriores. Si el torso es visible en el video, añade pose fotograma por fotograma; si el encuadre antiguo no contiene suficiente cuerpo, la muestra continúa entrenando con sus manos y no se elimina.
 
 Con el dataset inicial, una ejecución suele tardar entre **2 y 3 minutos**. El panel comprueba el manifiesto cada 30 segundos y la cámara cada 60 segundos, por lo que una pestaña abierta puede tardar hasta un minuto adicional en detectar la versión.
 
@@ -190,7 +195,7 @@ El cargador:
 - descarga `model.json` con la versión como parámetro de caché;
 - sustituye el modelo anterior sin reinstalar la aplicación.
 
-El contrato `lsd-motion-v2` transforma cada secuencia en 48 pasos y 144 características. Incluye la forma normalizada de los dedos, presencia de cada mano, trayectoria y velocidad de las muñecas, y distancia relativa entre ambas manos. El navegador mantiene compatibilidad con los modelos anteriores de 128 características mientras se publica una versión nueva.
+El contrato `lsd-body-v3` transforma cada secuencia en 48 pasos y 208 características. Incluye forma de los dedos, presencia de cada mano, trayectoria y velocidad de las muñecas, relación entre manos, cabeza, hombros, codos, cuello, pecho y distancias anatómicas de las manos. El navegador mantiene compatibilidad con los modelos anteriores de 128 y 144 características mientras se publica una versión nueva.
 
 Durante la inferencia, la interfaz muestra el mejor candidato aunque todavía no alcance el umbral. Solo agrega una palabra cuando el candidato supera la confianza configurada y se mantiene estable en varias evaluaciones. Al bajar las manos conserva brevemente la secuencia para terminar de interpretar el gesto completo.
 

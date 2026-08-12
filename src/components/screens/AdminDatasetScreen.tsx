@@ -36,8 +36,19 @@ interface LsdModelManifestSummary {
   version: string;
   variant: 'LSD';
   labels: Array<{ code: string; displayName: string }>;
-  metrics: { macroF1: number; minimumClassRecall: number; testSamples: number } | null;
+  metrics: { macroF1: number; minimumClassRecall: number; testSamples: number; samples?: number; participants?: number; bodyContextSamples?: number } | null;
   trainedAt: string | null;
+  evaluationMode?: string;
+}
+
+interface TrainingRunStatus {
+  id: number;
+  status: string;
+  conclusion: string | null;
+  runUrl: string;
+  createdAt: string;
+  updatedAt: string;
+  commit: string;
 }
 
 interface LsdSignLabel {
@@ -80,6 +91,7 @@ export const AdminDatasetScreen: React.FC = () => {
   const [publishNotice, setPublishNotice] = useState('');
   const [trainingSettings, setTrainingSettings] = useState<TrainingSettings>(DEFAULT_TRAINING_SETTINGS);
   const [modelStatus, setModelStatus] = useState<LsdModelManifestSummary | null>(null);
+  const [trainingRun, setTrainingRun] = useState<TrainingRunStatus | null>(null);
   const [signLabels, setSignLabels] = useState<LsdSignLabel[]>([]);
   const [labelProposals, setLabelProposals] = useState<SignLabelProposal[]>([]);
   const [proposalReviewing, setProposalReviewing] = useState('');
@@ -121,6 +133,21 @@ export const AdminDatasetScreen: React.FC = () => {
       window.clearInterval(manifestRefresh);
     };
   }, []);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    let cancelled = false;
+    const loadTrainingRun = async () => {
+      const token = await supabase.auth.getSession().then(({ data }) => data.session?.access_token || '');
+      if (!token) return;
+      const response = await fetch('/api/admin/lsd-model-run', { headers: { Authorization: `Bearer ${token}` }, cache: 'no-store' });
+      const payload = await response.json().catch(() => ({})) as { run?: TrainingRunStatus };
+      if (!cancelled && response.ok) setTrainingRun(payload.run || null);
+    };
+    void loadTrainingRun();
+    const interval = window.setInterval(() => void loadTrainingRun(), 20_000);
+    return () => { cancelled = true; window.clearInterval(interval); };
+  }, [isAdmin]);
 
   const openRecording = async (recording: ReviewRecording) => {
     setSelected(recording);
@@ -248,7 +275,7 @@ export const AdminDatasetScreen: React.FC = () => {
 
       <div className="rounded-3xl border border-emerald-200 bg-emerald-50 p-5"><div className="flex items-center gap-3"><span className="rounded-2xl bg-emerald-600 p-3 text-white"><ShieldCheck className="h-6 w-6" /></span><div><h2 className="text-lg font-black text-slate-900">Revisión del dataset LSD</h2><p className="text-sm text-slate-600">Los videos permanecen privados y los enlaces de revisión vencen en 5 minutos.</p></div></div></div>
       <div className="flex items-start gap-2 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"><TriangleAlert className="mt-0.5 h-5 w-5 shrink-0" /><p><strong>Aprobar no entrena el lector inmediatamente.</strong> La muestra queda validada para el próximo entrenamiento; el traductor aprenderá esa seña cuando se genere, evalúe y publique una nueva versión del modelo LSD.</p></div>
-      <div className={`rounded-2xl border p-4 ${modelStatus?.available ? 'border-emerald-200 bg-emerald-50' : 'border-slate-200 bg-slate-50'}`}><div className="flex items-start justify-between gap-3"><div><p className="text-xs font-black uppercase tracking-wider text-slate-600">Estado del lector LSD</p><p className="mt-1 text-sm font-black text-slate-900">{modelStatus?.version === 'pending' ? 'Entrenamiento solicitado' : modelStatus?.available ? `Modelo publicado (${modelStatus.version})` : 'Sin modelo publicado aún'}</p>{modelStatus?.metrics ? <p className="mt-1 text-xs text-slate-600">Macro F1 {modelStatus.metrics.macroF1.toFixed(2)} · recall mínimo {modelStatus.metrics.minimumClassRecall.toFixed(2)} · {modelStatus.metrics.testSamples} pruebas</p> : <p className="mt-1 text-xs text-slate-600">Las muestras aprobadas se usarán cuando el pipeline de entrenamiento publique un nuevo modelo.</p>}</div>{modelStatus?.available ? <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-600" /> : <Clock3 className="h-5 w-5 shrink-0 text-slate-400" />}</div>{publishNotice && <p className="mt-3 rounded-xl bg-white/70 p-3 text-xs font-bold text-emerald-900">{publishNotice}</p>}<button onClick={() => void publishModel()} disabled={publishSaving || !user} className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-700 px-4 py-3 text-sm font-black text-white disabled:opacity-50">{publishSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Rocket className="h-4 w-4" />}Publicar modelo LSD</button></div>
+      <div className={`rounded-2xl border p-4 ${modelStatus?.available ? 'border-emerald-200 bg-emerald-50' : 'border-slate-200 bg-slate-50'}`}><div className="flex items-start justify-between gap-3"><div><p className="text-xs font-black uppercase tracking-wider text-slate-600">Estado del lector LSD</p><p className="mt-1 text-sm font-black text-slate-900">{modelStatus?.version === 'pending' ? 'Entrenamiento solicitado' : modelStatus?.available ? `Modelo publicado (${modelStatus.version})` : 'Sin modelo publicado aún'}</p>{modelStatus?.metrics ? <><p className="mt-1 text-xs text-slate-600">Macro F1 {modelStatus.metrics.macroF1.toFixed(2)} · recall mínimo {modelStatus.metrics.minimumClassRecall.toFixed(2)} · {modelStatus.metrics.testSamples} pruebas</p>{modelStatus.evaluationMode === 'experimental-resubstitution' && <p className="mt-1 text-xs font-bold text-amber-700">Métrica experimental sobre los mismos ejemplos: no mide reconocimiento de personas nuevas.</p>}{modelStatus.metrics.bodyContextSamples !== undefined && <p className="mt-1 text-xs text-slate-600">Contexto corporal: {modelStatus.metrics.bodyContextSamples}/{modelStatus.metrics.samples || modelStatus.metrics.testSamples} muestras.</p>}</> : <p className="mt-1 text-xs text-slate-600">Las muestras aprobadas se usarán cuando el pipeline de entrenamiento publique un nuevo modelo.</p>}</div>{modelStatus?.available ? <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-600" /> : <Clock3 className="h-5 w-5 shrink-0 text-slate-400" />}</div>{trainingRun && <a href={trainingRun.runUrl} target="_blank" rel="noreferrer" className={`mt-3 block rounded-xl border p-3 text-xs font-bold ${trainingRun.status !== 'completed' ? 'border-amber-200 bg-amber-50 text-amber-900' : trainingRun.conclusion === 'success' ? 'border-emerald-200 bg-white/70 text-emerald-900' : 'border-rose-200 bg-rose-50 text-rose-800'}`}><span className="block font-black">Último entrenamiento: {trainingRun.status !== 'completed' ? 'en curso' : trainingRun.conclusion === 'success' ? 'completado' : 'falló'}</span><span className="mt-1 block font-semibold">{new Date(trainingRun.createdAt).toLocaleString('es-DO')} · commit {trainingRun.commit} · Abrir detalles</span></a>}{publishNotice && <p className="mt-3 rounded-xl bg-white/70 p-3 text-xs font-bold text-emerald-900">{publishNotice}</p>}<button onClick={() => void publishModel()} disabled={publishSaving || !user} className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-700 px-4 py-3 text-sm font-black text-white disabled:opacity-50">{publishSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Rocket className="h-4 w-4" />}Publicar modelo LSD</button></div>
 
       <section className="rounded-2xl border border-blue-200 bg-blue-50 p-4">
         <div className="flex items-center justify-between gap-3"><div><h3 className="text-sm font-black text-blue-950">Palabras y frases propuestas</h3><p className="mt-1 text-xs text-blue-800">Al aprobar una propuesta aparecerá en el selector de grabación. Todavía necesitará una grabación aprobada antes de entrenar.</p></div><span className="rounded-full bg-white px-3 py-1 text-xs font-black text-blue-800">{labelProposals.filter((item) => item.status === 'pending').length} pendientes</span></div>

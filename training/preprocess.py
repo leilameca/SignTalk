@@ -16,8 +16,13 @@ HAND_FEATURES = LANDMARKS_PER_HAND * COORDINATES
 BASE_FEATURE_COUNT = HAND_FEATURES * MAX_HANDS + MAX_HANDS
 MOTION_FEATURES_PER_HAND = 6  # desplazamiento xyz + velocidad xyz
 INTER_HAND_FEATURES = 4  # vector xyz + distancia entre muñecas
-FEATURE_COUNT = BASE_FEATURE_COUNT + MOTION_FEATURES_PER_HAND * MAX_HANDS + INTER_HAND_FEATURES
-FEATURE_CONTRACT = "lsd-motion-v2"
+POSE_SOURCE_INDICES = (0, 2, 5, 7, 8, 9, 10, 11, 12, 13, 14, 23, 24)
+POSE_POINT_COUNT = len(POSE_SOURCE_INDICES) + 2  # cuello y pecho derivados
+POSE_FEATURES = POSE_POINT_COUNT * COORDINATES + 1
+HAND_BODY_FEATURES = 9  # muñeca xyz relativa al pecho + seis distancias anatómicas
+BODY_CONTEXT_FEATURES = POSE_FEATURES + HAND_BODY_FEATURES * MAX_HANDS
+FEATURE_COUNT = BASE_FEATURE_COUNT + MOTION_FEATURES_PER_HAND * MAX_HANDS + INTER_HAND_FEATURES + BODY_CONTEXT_FEATURES
+FEATURE_CONTRACT = "lsd-body-v3"
 
 
 @dataclass(frozen=True)
@@ -63,6 +68,25 @@ def frame_entries(frame: Any) -> list[tuple[float, np.ndarray, np.ndarray, float
     return entries[:MAX_HANDS]
 
 
+def normalize_pose(frame: Any) -> tuple[np.ndarray, np.ndarray, float, list[np.ndarray]] | None:
+    pose = frame.get("pose", []) if isinstance(frame, dict) else []
+    if not isinstance(pose, list) or len(pose) < 25:
+        return None
+    points = [_point(point) for point in pose]
+    left_shoulder, right_shoulder = points[11], points[12]
+    shoulder_scale = float(np.linalg.norm(left_shoulder - right_shoulder))
+    if shoulder_scale < 0.02:
+        return None
+    neck = (left_shoulder + right_shoulder) / 2.0
+    hips = (points[23] + points[24]) / 2.0
+    chest = neck * 0.65 + hips * 0.35
+    selected = [points[index] for index in POSE_SOURCE_INDICES] + [neck, chest]
+    normalized = np.clip((np.stack(selected) - chest) / shoulder_scale, -6.0, 6.0).reshape(-1).astype(np.float32)
+    mouth = (points[9] + points[10]) / 2.0
+    anchors = [points[0], mouth, neck, chest, left_shoulder, right_shoulder]
+    return normalized, chest, shoulder_scale, anchors
+
+
 def encode_motion_sequence(frames: list[Any]) -> np.ndarray:
     result = np.zeros((len(frames), FEATURE_COUNT), dtype=np.float32)
     anchors: list[tuple[np.ndarray, float] | None] = [None] * MAX_HANDS
@@ -88,9 +112,20 @@ def encode_motion_sequence(frames: list[Any]) -> np.ndarray:
             second_wrist, second_scale = entries[1][2], entries[1][3]
             scale = max((first_scale + second_scale) / 2.0, 1e-4)
             vector = np.clip((second_wrist - first_wrist) / scale, -6.0, 6.0)
-            relation_start = FEATURE_COUNT - INTER_HAND_FEATURES
+            relation_start = BASE_FEATURE_COUNT + MOTION_FEATURES_PER_HAND * MAX_HANDS
             result[frame_index, relation_start:relation_start + 3] = vector
             result[frame_index, relation_start + 3] = min(8.0, float(np.linalg.norm(vector)))
+        pose_data = normalize_pose(frame)
+        if pose_data is not None:
+            pose_values, chest, body_scale, body_anchors = pose_data
+            pose_start = BASE_FEATURE_COUNT + MOTION_FEATURES_PER_HAND * MAX_HANDS + INTER_HAND_FEATURES
+            result[frame_index, pose_start:pose_start + POSE_POINT_COUNT * COORDINATES] = pose_values
+            result[frame_index, pose_start + POSE_POINT_COUNT * COORDINATES] = 1.0
+            for slot, (_, _, wrist, _) in enumerate(entries):
+                start = pose_start + POSE_FEATURES + slot * HAND_BODY_FEATURES
+                wrist_relative = np.clip((wrist - chest) / body_scale, -8.0, 8.0)
+                distances = [min(12.0, float(np.linalg.norm((wrist - anchor) / body_scale))) for anchor in body_anchors]
+                result[frame_index, start:start + HAND_BODY_FEATURES] = np.concatenate((wrist_relative, np.asarray(distances, dtype=np.float32)))
     return result
 
 

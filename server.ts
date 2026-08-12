@@ -75,6 +75,28 @@ app.post('/api/admin/publish-lsd-model', async (req, res) => {
   }
 });
 
+app.get('/api/admin/lsd-model-run', async (req, res) => {
+  try {
+    const token = req.headers.authorization?.replace(/^Bearer\s+/i, '');
+    if (!token) return res.status(401).json({ success: false, error: 'Sesión requerida.' });
+    const { data: authData, error: authError } = await authClient?.auth.getUser(token) ?? { data: null, error: new Error('Supabase no configurado') };
+    if (authError || !authData?.user) return res.status(401).json({ success: false, error: 'Sesión inválida o expirada.' });
+    const adminClient = createClient(supabaseUrl!, supabaseAnonKey!, { global: { headers: { Authorization: `Bearer ${token}` } }, auth: { persistSession: false, autoRefreshToken: false } });
+    const { data: isAdmin } = await adminClient.rpc('is_app_admin');
+    if (isAdmin !== true) return res.status(403).json({ success: false, error: 'Acceso administrativo requerido.' });
+    const githubToken = process.env.GITHUB_TOKEN;
+    const repo = process.env.GITHUB_REPOSITORY;
+    if (!githubToken || !repo) return res.status(503).json({ success: false, error: 'GitHub Actions no está configurado.' });
+    const response = await fetch(`https://api.github.com/repos/${repo}/actions/workflows/train-lsd-model.yml/runs?per_page=1`, { headers: { Accept: 'application/vnd.github+json', Authorization: `Bearer ${githubToken}`, 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'SignTalk-Admin-Status/1.0' } });
+    if (!response.ok) return res.status(502).json({ success: false, error: 'No se pudo consultar el entrenamiento.' });
+    const payload = await response.json() as { workflow_runs?: Array<{ id: number; status: string; conclusion: string | null; html_url: string; created_at: string; updated_at: string; head_sha: string }> };
+    const run = payload.workflow_runs?.[0];
+    return res.json({ success: true, run: run ? { id: run.id, status: run.status, conclusion: run.conclusion, runUrl: run.html_url, createdAt: run.created_at, updatedAt: run.updated_at, commit: run.head_sha.slice(0, 7) } : null });
+  } catch {
+    return res.status(500).json({ success: false, error: 'Error interno.' });
+  }
+});
+
 app.post('/api/translate-sign', async (req, res) => {
   try {
     if (process.env.VITE_ENABLE_GEMINI_ANALYSIS !== 'true') return res.status(404).json({ success: false, error: 'Recurso no disponible.' });

@@ -101,6 +101,38 @@ async function publishModel(request: Request, env: WorkerEnv): Promise<Response>
   return json({ success: true, message: 'Entrenamiento enviado a GitHub Actions.' }, 202);
 }
 
+async function modelRunStatus(request: Request, env: WorkerEnv): Promise<Response> {
+  if (!env.GITHUB_TOKEN || !env.GITHUB_REPOSITORY) return json({ success: false, error: 'GitHub Actions no está configurado.' }, 503);
+  const authorization = request.headers.get('authorization');
+  if (!authorization?.startsWith('Bearer ')) return json({ success: false, error: 'Sesión requerida.' }, 401);
+  if (!env.SUPABASE_URL || !env.SUPABASE_ANON_KEY) return json({ success: false, error: 'Supabase no está configurado.' }, 503);
+
+  const [authResponse, adminResponse] = await Promise.all([
+    fetch(`${env.SUPABASE_URL}/auth/v1/user`, { headers: { authorization, apikey: env.SUPABASE_ANON_KEY } }),
+    fetch(`${env.SUPABASE_URL}/rest/v1/rpc/is_app_admin`, {
+      method: 'POST',
+      headers: { authorization, apikey: env.SUPABASE_ANON_KEY, 'content-type': 'application/json' },
+      body: '{}',
+    }),
+  ]);
+  if (!authResponse.ok) return json({ success: false, error: 'Sesión inválida o expirada.' }, 401);
+  const isAdmin = adminResponse.ok ? await adminResponse.json() : false;
+  if (isAdmin !== true) return json({ success: false, error: 'Acceso administrativo requerido.' }, 403);
+
+  const response = await fetch(`https://api.github.com/repos/${env.GITHUB_REPOSITORY}/actions/workflows/train-lsd-model.yml/runs?per_page=1`, {
+    headers: {
+      'Accept': 'application/vnd.github+json',
+      'Authorization': `Bearer ${env.GITHUB_TOKEN}`,
+      'X-GitHub-Api-Version': '2022-11-28',
+      'User-Agent': 'SignTalk-Admin-Status/1.0',
+    },
+  });
+  if (!response.ok) return json({ success: false, error: 'No se pudo consultar el entrenamiento.' }, 502);
+  const payload = await response.json() as { workflow_runs?: Array<{ id: number; status: string; conclusion: string | null; html_url: string; created_at: string; updated_at: string; head_sha: string }> };
+  const run = payload.workflow_runs?.[0];
+  return json({ success: true, run: run ? { id: run.id, status: run.status, conclusion: run.conclusion, runUrl: run.html_url, createdAt: run.created_at, updatedAt: run.updated_at, commit: run.head_sha.slice(0, 7) } : null });
+}
+
 async function translate(request: Request, env: WorkerEnv): Promise<Response> {
   if (env.GEMINI_ANALYSIS_ENABLED !== 'true') return json({ success: false, error: 'Recurso no disponible.' }, 404);
   if (!env.GEMINI_API_KEY) return json({ success: false, error: 'Gemini no está configurado en producción.' }, 503);
@@ -151,6 +183,10 @@ export default {
     }
     if (url.pathname === '/api/admin/publish-lsd-model' && request.method === 'POST') {
       try { return secureResponse(await publishModel(request, env)); }
+      catch { return secureResponse(json({ success: false, error: 'Error interno.' }, 500)); }
+    }
+    if (url.pathname === '/api/admin/lsd-model-run' && request.method === 'GET') {
+      try { return secureResponse(await modelRunStatus(request, env)); }
       catch { return secureResponse(json({ success: false, error: 'Error interno.' }, 500)); }
     }
     return secureResponse(await env.ASSETS.fetch(request));

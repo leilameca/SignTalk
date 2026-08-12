@@ -16,7 +16,7 @@ from sklearn.metrics import classification_report, confusion_matrix, f1_score, r
 from sklearn.model_selection import GroupShuffleSplit
 from sklearn.utils.class_weight import compute_class_weight
 
-from preprocess import BASE_FEATURE_COUNT, FEATURE_CONTRACT, FEATURE_COUNT, SEQUENCE_LENGTH, prepare_dataset, validate_coverage
+from preprocess import BASE_FEATURE_COUNT, FEATURE_CONTRACT, FEATURE_COUNT, INTER_HAND_FEATURES, MOTION_FEATURES_PER_HAND, MAX_HANDS, POSE_POINT_COUNT, COORDINATES, SEQUENCE_LENGTH, prepare_dataset, validate_coverage
 
 
 def split_by_participant(features, labels, groups, seed: int):
@@ -108,12 +108,15 @@ def main(arguments) -> None:
     predictions = probabilities.argmax(axis=1)
     macro_f1 = float(f1_score(encoded_labels[test], predictions, average="macro"))
     per_class_recall = recall_score(encoded_labels[test], predictions, average=None, labels=np.arange(len(label_codes)), zero_division=0)
+    pose_presence_index = BASE_FEATURE_COUNT + MOTION_FEATURES_PER_HAND * MAX_HANDS + INTER_HAND_FEATURES + POSE_POINT_COUNT * COORDINATES
+    body_context_samples = int(np.sum(np.max(dataset.features[:, :, pose_presence_index], axis=1) > 0))
     report = {
         "macroF1": macro_f1,
         "minimumClassRecall": float(per_class_recall.min()),
         "testSamples": int(len(test)),
         "participants": int(len(set(dataset.participants.tolist()))),
         "samples": int(len(dataset.features)),
+        "bodyContextSamples": body_context_samples,
         "evaluationMode": "experimental-resubstitution" if experimental else "participant-holdout",
         "classification": classification_report(encoded_labels[test], predictions, target_names=label_codes, output_dict=True, zero_division=0),
         "confusionMatrix": confusion_matrix(encoded_labels[test], predictions, labels=np.arange(len(label_codes))).tolist(),
@@ -136,7 +139,7 @@ def main(arguments) -> None:
             "experimental": experimental,
             "evaluationMode": report["evaluationMode"],
             "labels": [{"code": code, "displayName": dataset.label_names.get(code, code)} for code in label_codes],
-            "metrics": {"macroF1": macro_f1, "minimumClassRecall": float(per_class_recall.min()), "testSamples": len(test)},
+            "metrics": {"macroF1": macro_f1, "minimumClassRecall": float(per_class_recall.min()), "testSamples": len(test), "samples": len(dataset.features), "participants": participant_count, "bodyContextSamples": body_context_samples},
             "trainedAt": datetime.now(timezone.utc).isoformat(),
         }
         (staging / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")

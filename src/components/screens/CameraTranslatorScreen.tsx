@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { FilesetResolver, HandLandmarker, type NormalizedLandmark } from '@mediapipe/tasks-vision';
+import { FilesetResolver, HandLandmarker, PoseLandmarker, type NormalizedLandmark } from '@mediapipe/tasks-vision';
 import { Activity, AlertCircle, Camera, Check, Copy, Loader2, RotateCcw, Send, Smartphone, SwitchCamera, Trash2, Volume2, WifiOff } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { useTheme } from '../../context/ThemeContext';
@@ -9,6 +9,7 @@ import { classifyAslAlphabet, classifyAslAlphabetSequence, classifyLocalSign, cl
 import { loadLsdModel, predictLsdSequence, type LsdLoadedModel, type LsdSequenceFrame } from '../../utils/lsdModel';
 
 const HAND_CONNECTIONS = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
+const BODY_CONNECTIONS = [[0,7],[0,8],[7,11],[8,12],[11,12],[11,13],[12,14],[11,23],[12,24],[23,24]];
 const GEMINI_ANALYSIS_ENABLED = import.meta.env.VITE_ENABLE_GEMINI_ANALYSIS === 'true';
 
 export const CameraTranslatorScreen: React.FC = () => {
@@ -19,7 +20,9 @@ export const CameraTranslatorScreen: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const landmarkerRef = useRef<HandLandmarker | null>(null);
+  const poseLandmarkerRef = useRef<PoseLandmarker | null>(null);
   const landmarksRef = useRef<NormalizedLandmark[][]>([]);
+  const poseLandmarksRef = useRef<NormalizedLandmark[]>([]);
   const animationRef = useRef<number>(0);
   const lastFrameRef = useRef(0);
   const lastLocalInferenceRef = useRef(0);
@@ -95,7 +98,7 @@ export const CameraTranslatorScreen: React.FC = () => {
     return () => { active = false; window.clearInterval(modelRefresh); };
   }, [settings.signLanguageVariant]);
 
-  const drawLandmarks = useCallback((hands: NormalizedLandmark[][]) => {
+  const drawLandmarks = useCallback((hands: NormalizedLandmark[][], pose: NormalizedLandmark[]) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const context = canvas.getContext('2d');
@@ -108,6 +111,25 @@ export const CameraTranslatorScreen: React.FC = () => {
     context.lineWidth = settings.overlayStyle === 'minimal' ? 2 : 4;
     context.shadowColor = activeTheme.primaryHex;
     context.shadowBlur = settings.overlayStyle === 'glowing' ? 12 : 0;
+    if (pose.length >= 25) {
+      context.save();
+      context.globalAlpha = 0.62;
+      for (const [start, end] of BODY_CONNECTIONS) {
+        if ((pose[start].visibility ?? 1) < 0.35 || (pose[end].visibility ?? 1) < 0.35) continue;
+        context.beginPath();
+        context.moveTo(pose[start].x * width, pose[start].y * height);
+        context.lineTo(pose[end].x * width, pose[end].y * height);
+        context.stroke();
+      }
+      for (const index of [0, 7, 8, 11, 12, 13, 14, 23, 24]) {
+        const point = pose[index];
+        if ((point.visibility ?? 1) < 0.35) continue;
+        context.beginPath();
+        context.arc(point.x * width, point.y * height, settings.overlayStyle === 'minimal' ? 2 : 4, 0, Math.PI * 2);
+        context.fill();
+      }
+      context.restore();
+    }
     for (const hand of hands) {
       for (const [start, end] of HAND_CONNECTIONS) {
         context.beginPath();
@@ -129,17 +151,33 @@ export const CameraTranslatorScreen: React.FC = () => {
       try {
         const vision = await FilesetResolver.forVisionTasks('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/wasm');
         if (cancelled) return;
-        landmarkerRef.current = await HandLandmarker.createFromOptions(vision, {
-          baseOptions: { modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task', delegate: 'GPU' },
-          runningMode: 'VIDEO',
-          numHands: 2,
-          minHandDetectionConfidence: 0.6,
-          minTrackingConfidence: 0.6,
-        });
+        try {
+          [landmarkerRef.current, poseLandmarkerRef.current] = await Promise.all([
+            HandLandmarker.createFromOptions(vision, {
+              baseOptions: { modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task', delegate: 'GPU' },
+              runningMode: 'VIDEO', numHands: 2, minHandDetectionConfidence: 0.6, minTrackingConfidence: 0.6,
+            }),
+            PoseLandmarker.createFromOptions(vision, {
+              baseOptions: { modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task', delegate: 'GPU' },
+              runningMode: 'VIDEO', numPoses: 1, minPoseDetectionConfidence: 0.5, minTrackingConfidence: 0.5,
+            }),
+          ]);
+        } catch {
+          [landmarkerRef.current, poseLandmarkerRef.current] = await Promise.all([
+            HandLandmarker.createFromOptions(vision, {
+              baseOptions: { modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task' },
+              runningMode: 'VIDEO', numHands: 2, minHandDetectionConfidence: 0.6, minTrackingConfidence: 0.6,
+            }),
+            PoseLandmarker.createFromOptions(vision, {
+              baseOptions: { modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task' },
+              runningMode: 'VIDEO', numPoses: 1, minPoseDetectionConfidence: 0.5, minTrackingConfidence: 0.5,
+            }),
+          ]);
+        }
         if (!cancelled) setTrackingReady(true);
       } catch (cause) {
         console.error(cause);
-        if (!cancelled) setError('No fue posible iniciar el seguimiento de manos.');
+        if (!cancelled) setError('No fue posible iniciar el seguimiento de manos y cuerpo.');
       }
     };
     void initializeTracking();
@@ -147,6 +185,8 @@ export const CameraTranslatorScreen: React.FC = () => {
       cancelled = true;
       landmarkerRef.current?.close();
       landmarkerRef.current = null;
+      poseLandmarkerRef.current?.close();
+      poseLandmarkerRef.current = null;
     };
   }, []);
 
@@ -201,13 +241,16 @@ export const CameraTranslatorScreen: React.FC = () => {
     const detect = (timestamp: number) => {
       const video = videoRef.current;
       const landmarker = landmarkerRef.current;
+      const poseLandmarker = poseLandmarkerRef.current;
       const interval = 1000 / Math.max(1, settings.cameraFPS);
-      if (isCapturing && video?.readyState === HTMLMediaElement.HAVE_ENOUGH_DATA && landmarker && timestamp - lastFrameRef.current >= interval) {
+      if (isCapturing && video?.readyState === HTMLMediaElement.HAVE_ENOUGH_DATA && landmarker && poseLandmarker && timestamp - lastFrameRef.current >= interval) {
         lastFrameRef.current = timestamp;
         const result = landmarker.detectForVideo(video, timestamp);
+        const pose = poseLandmarker.detectForVideo(video, timestamp).landmarks[0] || [];
         landmarksRef.current = result.landmarks;
+        poseLandmarksRef.current = pose;
         setHasVisibleHand(result.landmarks.length > 0);
-        drawLandmarks(result.landmarks);
+        drawLandmarks(result.landmarks, pose);
         if (settings.signLanguageVariant === 'LSD' && recognitionMode === 'signs' && timestamp - lastLsdFrameRef.current >= 66) {
           lastLsdFrameRef.current = timestamp;
           if (result.landmarks.length) {
@@ -215,6 +258,7 @@ export const CameraTranslatorScreen: React.FC = () => {
             lsdFramesRef.current = [...lsdFramesRef.current.slice(-47), {
               hands: result.landmarks,
               handedness: result.handednesses.map((categories) => categories[0]?.categoryName || 'Unknown'),
+              pose,
             }];
           } else {
             lsdNeutralSinceRef.current ??= timestamp;
@@ -417,7 +461,7 @@ export const CameraTranslatorScreen: React.FC = () => {
             <video ref={videoRef} playsInline muted className={`h-full w-full object-contain ${facingMode === 'user' ? '-scale-x-100' : ''}`} />
             <canvas ref={canvasRef} width={1280} height={720} className={`pointer-events-none absolute inset-0 h-full w-full object-contain ${facingMode === 'user' ? '-scale-x-100' : ''}`} />
             <div className="absolute inset-x-3 top-3 flex min-w-0 flex-wrap gap-1.5 sm:left-4 sm:right-auto sm:top-4 sm:gap-2">
-              <span className="rounded-full bg-black/60 px-3 py-1.5 text-xs font-bold text-white backdrop-blur"><Activity className="mr-1 inline h-3.5 w-3.5 text-emerald-400" />{trackingReady ? `${landmarksRef.current.length} mano(s)` : 'Cargando MediaPipe'}</span>
+              <span className="rounded-full bg-black/60 px-3 py-1.5 text-xs font-bold text-white backdrop-blur"><Activity className="mr-1 inline h-3.5 w-3.5 text-emerald-400" />{trackingReady ? `${landmarksRef.current.length} mano(s) · ${poseLandmarksRef.current.length >= 25 ? 'cuerpo' : 'acércate al centro'}` : 'Cargando manos y cuerpo'}</span>
               {settings.signLanguageVariant === 'LSD' && <span className="rounded-full bg-black/60 px-3 py-1.5 text-xs font-bold text-white">{lsdModelStatus === 'ready' ? `LSD IA${lsdModelExperimental ? ' experimental' : ''} ${lsdModelVersion.slice(0, 8)}` : lsdModelStatus === 'loading' ? 'Cargando modelo LSD' : 'LSD en recopilación'}</span>}
               {localPrediction && <span className="rounded-full bg-black/60 px-3 py-1.5 text-xs font-bold text-white">Local {Math.round(localPrediction.confidence * 100)}%</span>}
             </div>

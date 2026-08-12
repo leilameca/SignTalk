@@ -6,10 +6,17 @@ const HAND_FEATURES = LANDMARKS_PER_HAND * 3;
 const BASE_FEATURE_COUNT = HAND_FEATURES * MAX_HANDS + MAX_HANDS;
 const MOTION_FEATURES_PER_HAND = 6;
 const INTER_HAND_FEATURES = 4;
+const POSE_SOURCE_INDICES = [0, 2, 5, 7, 8, 9, 10, 11, 12, 13, 14, 23, 24] as const;
+const POSE_POINT_COUNT = POSE_SOURCE_INDICES.length + 2; // cuello y pecho derivados
+const POSE_FEATURES = POSE_POINT_COUNT * 3 + 1;
+const HAND_BODY_FEATURES = 9; // muñeca xyz relativa al pecho + seis distancias anatómicas
+const MOTION_FEATURE_COUNT = BASE_FEATURE_COUNT + MOTION_FEATURES_PER_HAND * MAX_HANDS + INTER_HAND_FEATURES;
+const BODY_FEATURE_COUNT = MOTION_FEATURE_COUNT + POSE_FEATURES + HAND_BODY_FEATURES * MAX_HANDS;
 
 export interface LsdSequenceFrame {
   hands: NormalizedLandmark[][];
   handedness: string[];
+  pose?: NormalizedLandmark[];
 }
 
 interface LsdModelManifest {
@@ -76,6 +83,40 @@ function frameEntries(frame: LsdSequenceFrame): EncodedHand[] {
   }).filter((entry): entry is EncodedHand => Boolean(entry)).sort((a, b) => a.order - b.order);
 }
 
+interface EncodedPose {
+  normalized: number[];
+  chest: [number, number, number];
+  scale: number;
+  anchors: Array<[number, number, number]>;
+}
+
+const midpoint = (a: NormalizedLandmark, b: NormalizedLandmark): [number, number, number] => [
+  (a.x + b.x) / 2,
+  (a.y + b.y) / 2,
+  (a.z + b.z) / 2,
+];
+
+function normalizePose(pose: NormalizedLandmark[] | undefined): EncodedPose | null {
+  if (!pose || pose.length < 25) return null;
+  const leftShoulder = pose[11];
+  const rightShoulder = pose[12];
+  const shoulderScale = distance(leftShoulder, rightShoulder);
+  if (shoulderScale < 0.02) return null;
+  const neck = midpoint(leftShoulder, rightShoulder);
+  const hips = midpoint(pose[23], pose[24]);
+  const chest: [number, number, number] = neck.map((value, axis) => value * 0.65 + hips[axis] * 0.35) as [number, number, number];
+  const points: Array<[number, number, number]> = POSE_SOURCE_INDICES.map((index) => [pose[index].x, pose[index].y, pose[index].z]);
+  points.push(neck, chest);
+  const normalized = points.flatMap((point) => point.map((value, axis) => Math.max(-6, Math.min(6, (value - chest[axis]) / shoulderScale))));
+  const mouth = midpoint(pose[9], pose[10]);
+  const anchors: Array<[number, number, number]> = [
+    [pose[0].x, pose[0].y, pose[0].z], mouth, neck, chest,
+    [leftShoulder.x, leftShoulder.y, leftShoulder.z],
+    [rightShoulder.x, rightShoulder.y, rightShoulder.z],
+  ];
+  return { normalized, chest, scale: shoulderScale, anchors };
+}
+
 function encodeLegacyFrame(frame: LsdSequenceFrame, featureCount: number): number[] {
   const encoded = new Array(featureCount).fill(0);
   const entries = frameEntries(frame);
@@ -93,7 +134,9 @@ function encodeSequence(frames: LsdSequenceFrame[], manifest: LsdModelManifest):
     const sourceIndex = Math.round(index * (visible.length - 1) / Math.max(1, manifest.sequenceLength - 1));
     return visible[sourceIndex];
   });
-  if (manifest.featureCount <= BASE_FEATURE_COUNT || manifest.featureContract !== 'lsd-motion-v2') {
+  const supportsMotion = manifest.featureContract === 'lsd-motion-v2' && manifest.featureCount === MOTION_FEATURE_COUNT;
+  const supportsBody = manifest.featureContract === 'lsd-body-v3' && manifest.featureCount === BODY_FEATURE_COUNT;
+  if (!supportsMotion && !supportsBody) {
     return sampled.map((frame) => encodeLegacyFrame(frame, manifest.featureCount));
   }
   const anchors: Array<{ wrist: [number, number, number]; palmSize: number } | null> = new Array(MAX_HANDS).fill(null);
@@ -120,6 +163,20 @@ function encodeSequence(frames: LsdSequenceFrame[], manifest: LsdModelManifest):
       const relationStart = BASE_FEATURE_COUNT + MOTION_FEATURES_PER_HAND * MAX_HANDS;
       encoded.splice(relationStart, 3, ...vector);
       encoded[relationStart + 3] = Math.min(8, Math.hypot(...vector));
+    }
+    if (manifest.featureContract === 'lsd-body-v3') {
+      const pose = normalizePose(frame.pose);
+      const poseStart = BASE_FEATURE_COUNT + MOTION_FEATURES_PER_HAND * MAX_HANDS + INTER_HAND_FEATURES;
+      if (pose) {
+        encoded.splice(poseStart, POSE_POINT_COUNT * 3, ...pose.normalized);
+        encoded[poseStart + POSE_POINT_COUNT * 3] = 1;
+        entries.forEach((entry, slot) => {
+          const start = poseStart + POSE_FEATURES + slot * HAND_BODY_FEATURES;
+          const wristRelative = entry.wrist.map((value, axis) => Math.max(-8, Math.min(8, (value - pose.chest[axis]) / pose.scale)));
+          const distances = pose.anchors.map((anchor) => Math.min(12, Math.hypot(...entry.wrist.map((value, axis) => (value - anchor[axis]) / pose.scale))));
+          encoded.splice(start, HAND_BODY_FEATURES, ...wristRelative, ...distances);
+        });
+      }
     }
     return encoded;
   });

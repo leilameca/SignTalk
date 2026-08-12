@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { FilesetResolver, HandLandmarker, type NormalizedLandmark } from '@mediapipe/tasks-vision';
+import { FilesetResolver, HandLandmarker, PoseLandmarker, type NormalizedLandmark } from '@mediapipe/tasks-vision';
 import { ArrowLeft, Camera, CheckCircle2, Database, Loader2, MessageSquarePlus, RotateCcw, ShieldCheck, SwitchCamera, Trash2, Upload, WifiOff } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { useAuth } from '../../context/AuthContext';
@@ -32,6 +32,7 @@ interface LandmarkFrame {
   timestampMs: number;
   hands: Array<Array<{ x: number; y: number; z: number }>>;
   handedness: string[];
+  pose: Array<{ x: number; y: number; z: number; visibility: number }>;
 }
 
 interface CapturedClip {
@@ -40,6 +41,8 @@ interface CapturedClip {
   contentType: string;
   frames: LandmarkFrame[];
   durationMs: number;
+  labelCode: string;
+  labelName: string;
 }
 
 const CONSENT_VERSION = 'dataset-lsd-v1-2026-08';
@@ -57,16 +60,25 @@ const compactHands = (hands: NormalizedLandmark[][]) => hands.map((hand) => hand
   z: Math.round(point.z * 10_000) / 10_000,
 })));
 
+const compactPose = (pose: NormalizedLandmark[]) => pose.map((point) => ({
+  x: Math.round(point.x * 10_000) / 10_000,
+  y: Math.round(point.y * 10_000) / 10_000,
+  z: Math.round(point.z * 10_000) / 10_000,
+  visibility: Math.round((point.visibility ?? 0) * 1_000) / 1_000,
+}));
+
 export const DatasetContributionScreen: React.FC = () => {
   const { setActiveTab } = useApp();
   const { user } = useAuth();
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const landmarkerRef = useRef<HandLandmarker | null>(null);
+  const poseLandmarkerRef = useRef<PoseLandmarker | null>(null);
   const animationRef = useRef(0);
   const recordingRef = useRef(false);
   const recordingStartedRef = useRef(0);
   const lastLandmarkFrameRef = useRef(0);
+  const lastTrackingFrameRef = useRef(0);
   const framesRef = useRef<LandmarkFrame[]>([]);
   const stopTimerRef = useRef<number | null>(null);
 
@@ -77,7 +89,8 @@ export const DatasetContributionScreen: React.FC = () => {
   const [consentResearch, setConsentResearch] = useState(false);
   const [consentProduct, setConsentProduct] = useState(false);
   const [labels, setLabels] = useState<SignLabel[]>(FALLBACK_LABELS);
-  const [selectedLabel, setSelectedLabel] = useState('hola');
+  const [selectedLabel, setSelectedLabel] = useState('');
+  const [awaitingProposalName, setAwaitingProposalName] = useState('');
   const [proposals, setProposals] = useState<SignLabelProposal[]>([]);
   const [proposedText, setProposedText] = useState('');
   const [proposedMotion, setProposedMotion] = useState<SignLabel['motion_type']>('dynamic');
@@ -86,6 +99,7 @@ export const DatasetContributionScreen: React.FC = () => {
   const [cameraReady, setCameraReady] = useState(false);
   const [trackingReady, setTrackingReady] = useState(false);
   const [handCount, setHandCount] = useState(0);
+  const [bodyTracked, setBodyTracked] = useState(false);
   const [recording, setRecording] = useState(false);
   const [secondsRemaining, setSecondsRemaining] = useState(0);
   const [captured, setCaptured] = useState<CapturedClip | null>(null);
@@ -101,6 +115,34 @@ export const DatasetContributionScreen: React.FC = () => {
     try { setPendingCount((await listQueuedSignRecordings(user.id)).length); }
     catch { setPendingCount(0); }
   }, [user]);
+
+  const refreshCatalog = useCallback(async () => {
+    if (!user) return;
+    const [labelsResult, proposalsResult] = await Promise.all([
+      supabase.from('sign_labels').select('code,display_name,motion_type').eq('variant', 'LSD').eq('active', true).order('display_name'),
+      supabase.from('sign_label_proposals').select('id,display_name,motion_type,status,rejection_reason,created_at').eq('user_id', user.id).order('created_at', { ascending: false }),
+    ]);
+    const availableLabels = (labelsResult.data || []) as SignLabel[];
+    const currentProposals = (proposalsResult.data || []) as SignLabelProposal[];
+    if (availableLabels.length) setLabels(availableLabels);
+    if (!proposalsResult.error) setProposals(currentProposals);
+
+    if (awaitingProposalName) {
+      const proposal = currentProposals.find((item) => item.display_name.toLocaleLowerCase('es') === awaitingProposalName.toLocaleLowerCase('es'));
+      const approvedLabel = proposal?.status === 'approved'
+        ? availableLabels.find((item) => item.display_name.toLocaleLowerCase('es') === awaitingProposalName.toLocaleLowerCase('es'))
+        : null;
+      if (approvedLabel) {
+        setAwaitingProposalName('');
+        setSelectedLabel(approvedLabel.code);
+        setStatus(`“${approvedLabel.display_name}” fue aprobada y ya está seleccionada para grabar.`);
+      } else {
+        setSelectedLabel('');
+      }
+    } else {
+      setSelectedLabel((current) => current && availableLabels.some((item) => item.code === current) ? current : availableLabels[0]?.code || '');
+    }
+  }, [awaitingProposalName, user]);
 
   const uploadRecording = useCallback(async (item: QueuedSignRecording) => {
     const { error: participantError } = await supabase.from('dataset_participants').upsert(item.participant, { onConflict: 'user_id' });
@@ -175,13 +217,19 @@ export const DatasetContributionScreen: React.FC = () => {
         localStorage.setItem(`${PARTICIPANT_STORAGE_KEY}:${user.id}`, JSON.stringify(saved));
       }
     });
-    void supabase.from('sign_labels').select('code,display_name,motion_type').eq('variant', 'LSD').eq('active', true).order('display_name').then(({ data }) => {
-      if (data?.length) setLabels(data as SignLabel[]);
-    });
-    void supabase.from('sign_label_proposals').select('id,display_name,motion_type,status,rejection_reason,created_at').eq('user_id', user.id).order('created_at', { ascending: false }).then(({ data }) => {
-      if (data) setProposals(data as SignLabelProposal[]);
-    });
-  }, [refreshPendingCount, user]);
+    void refreshCatalog();
+  }, [refreshCatalog, refreshPendingCount, user]);
+
+  useEffect(() => {
+    if (!user) return;
+    const refresh = () => void refreshCatalog();
+    const interval = window.setInterval(refresh, 15_000);
+    window.addEventListener('focus', refresh);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener('focus', refresh);
+    };
+  }, [refreshCatalog, user]);
 
   useEffect(() => {
     const online = () => void syncPending();
@@ -212,15 +260,27 @@ export const DatasetContributionScreen: React.FC = () => {
           await videoRef.current.play();
         }
         try {
-          landmarkerRef.current = await HandLandmarker.createFromOptions(vision, {
-            baseOptions: { modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task', delegate: 'GPU' },
-            runningMode: 'VIDEO', numHands: 2, minHandDetectionConfidence: 0.65, minTrackingConfidence: 0.65,
-          });
+          [landmarkerRef.current, poseLandmarkerRef.current] = await Promise.all([
+            HandLandmarker.createFromOptions(vision, {
+              baseOptions: { modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task', delegate: 'GPU' },
+              runningMode: 'VIDEO', numHands: 2, minHandDetectionConfidence: 0.65, minTrackingConfidence: 0.65,
+            }),
+            PoseLandmarker.createFromOptions(vision, {
+              baseOptions: { modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task', delegate: 'GPU' },
+              runningMode: 'VIDEO', numPoses: 1, minPoseDetectionConfidence: 0.55, minTrackingConfidence: 0.55,
+            }),
+          ]);
         } catch {
-          landmarkerRef.current = await HandLandmarker.createFromOptions(vision, {
-            baseOptions: { modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task' },
-            runningMode: 'VIDEO', numHands: 2, minHandDetectionConfidence: 0.65, minTrackingConfidence: 0.65,
-          });
+          [landmarkerRef.current, poseLandmarkerRef.current] = await Promise.all([
+            HandLandmarker.createFromOptions(vision, {
+              baseOptions: { modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task' },
+              runningMode: 'VIDEO', numHands: 2, minHandDetectionConfidence: 0.65, minTrackingConfidence: 0.65,
+            }),
+            PoseLandmarker.createFromOptions(vision, {
+              baseOptions: { modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task' },
+              runningMode: 'VIDEO', numPoses: 1, minPoseDetectionConfidence: 0.55, minTrackingConfidence: 0.55,
+            }),
+          ]);
         }
         setCameraReady(true);
         setTrackingReady(true);
@@ -228,15 +288,20 @@ export const DatasetContributionScreen: React.FC = () => {
         const detect = (timestamp: number) => {
           const video = videoRef.current;
           const landmarker = landmarkerRef.current;
-          if (video?.readyState === HTMLMediaElement.HAVE_ENOUGH_DATA && landmarker) {
+          const poseLandmarker = poseLandmarkerRef.current;
+          if (video?.readyState === HTMLMediaElement.HAVE_ENOUGH_DATA && landmarker && poseLandmarker && timestamp - lastTrackingFrameRef.current >= 66) {
+            lastTrackingFrameRef.current = timestamp;
             const result = landmarker.detectForVideo(video, timestamp);
+            const pose = poseLandmarker.detectForVideo(video, timestamp).landmarks[0] || [];
             setHandCount(result.landmarks.length);
+            setBodyTracked(pose.length >= 25);
             if (recordingRef.current && timestamp - lastLandmarkFrameRef.current >= 66) {
               lastLandmarkFrameRef.current = timestamp;
               framesRef.current.push({
                 timestampMs: Math.round(timestamp - recordingStartedRef.current),
                 hands: compactHands(result.landmarks),
                 handedness: result.handednesses.map((categories) => categories[0]?.categoryName || 'Unknown'),
+                pose: compactPose(pose),
               });
             }
           }
@@ -257,6 +322,8 @@ export const DatasetContributionScreen: React.FC = () => {
       streamRef.current = null;
       landmarkerRef.current?.close();
       landmarkerRef.current = null;
+      poseLandmarkerRef.current?.close();
+      poseLandmarkerRef.current = null;
     };
   }, [facingMode, participant]);
 
@@ -289,7 +356,8 @@ export const DatasetContributionScreen: React.FC = () => {
 
   const startRecording = () => {
     const stream = streamRef.current;
-    if (!stream || !cameraReady || recording || !selectedLabel || typeof MediaRecorder === 'undefined') {
+    const chosenLabel = labels.find((label) => label.code === selectedLabel);
+    if (!stream || !cameraReady || recording || !chosenLabel || typeof MediaRecorder === 'undefined') {
       setError('Este navegador no permite iniciar la grabación de video.');
       return;
     }
@@ -317,8 +385,12 @@ export const DatasetContributionScreen: React.FC = () => {
         setError('No se detectaron suficientes fotogramas con las manos visibles. Repite la grabación.');
         return;
       }
-      setCaptured({ blob: new Blob(chunks, { type: contentType }), extension: contentType.includes('mp4') ? 'mp4' : 'webm', contentType, frames, durationMs: 3000 });
-      setStatus('Grabación lista. Revísala antes de enviarla.');
+      if (frames.filter((frame) => frame.pose.length >= 25).length < 8) {
+        setError('No se detectaron suficientes fotogramas con cabeza, hombros y pecho visibles. Aléjate un poco de la cámara y repite la grabación.');
+        return;
+      }
+      setCaptured({ blob: new Blob(chunks, { type: contentType }), extension: contentType.includes('mp4') ? 'mp4' : 'webm', contentType, frames, durationMs: 3000, labelCode: chosenLabel.code, labelName: chosenLabel.display_name });
+      setStatus(`Grabación de “${chosenLabel.display_name}” lista. Revísala antes de enviarla.`);
     };
     recorder.start(200);
     const countdown = window.setInterval(() => setSecondsRemaining((value) => Math.max(0, value - 1)), 1000);
@@ -333,7 +405,7 @@ export const DatasetContributionScreen: React.FC = () => {
     setBusy(true);
     setError('');
     const item: QueuedSignRecording = {
-      id: crypto.randomUUID(), userId: user.id, participant, labelCode: selectedLabel, variant: 'LSD',
+      id: crypto.randomUUID(), userId: user.id, participant, labelCode: captured.labelCode, variant: 'LSD',
       blob: captured.blob, extension: captured.extension, contentType: captured.contentType,
       landmarkSequence: captured.frames, durationMs: captured.durationMs, frameCount: captured.frames.length,
       cameraFacing: facingMode, createdAt: new Date().toISOString(),
@@ -376,8 +448,11 @@ export const DatasetContributionScreen: React.FC = () => {
       setError(proposalError?.code === '23505' ? 'Esa propuesta ya está pendiente o fue aprobada.' : 'No se pudo enviar la propuesta. Inténtalo nuevamente.');
     } else {
       setProposals((current) => [data as SignLabelProposal, ...current]);
+      setAwaitingProposalName(displayName);
+      setSelectedLabel('');
+      setCaptured(null);
       setProposedText('');
-      setStatus('Propuesta enviada. Cuando el administrador la apruebe aparecerá en el selector para grabarla.');
+      setStatus(`Propuesta “${displayName}” enviada. La grabación queda bloqueada hasta que el administrador la apruebe, para evitar etiquetarla con otra seña.`);
     }
     setProposalSaving(false);
   };
@@ -425,7 +500,7 @@ export const DatasetContributionScreen: React.FC = () => {
       <section className="min-w-0">
         <div className="relative aspect-[3/4] overflow-hidden rounded-3xl bg-slate-950 sm:aspect-video"><video ref={videoRef} playsInline muted className={`h-full w-full object-contain ${facingMode === 'user' ? '-scale-x-100' : ''}`} />
           {!cameraReady && <div className="absolute inset-0 grid place-items-center text-sm font-bold text-white"><Loader2 className="mr-2 inline h-5 w-5 animate-spin" />Preparando cámara…</div>}
-          <span className="absolute top-3 left-3 rounded-full bg-black/60 px-3 py-1.5 text-xs font-bold text-white">{trackingReady ? `${handCount} mano(s)` : 'Cargando MediaPipe'}</span>
+          <span className="absolute top-3 left-3 rounded-full bg-black/60 px-3 py-1.5 text-xs font-bold text-white">{trackingReady ? `${handCount} mano(s) · ${bodyTracked ? 'cuerpo visible' : 'muestra cabeza y torso'}` : 'Cargando manos y cuerpo'}</span>
           {recording && <div className="absolute inset-0 grid place-items-center bg-rose-950/20"><span className="rounded-full bg-rose-600 px-5 py-3 text-lg font-black text-white shadow-lg">● REC · {secondsRemaining}s</span></div>}
           <button onClick={() => setFacingMode((value) => value === 'environment' ? 'user' : 'environment')} disabled={recording || busy} className="absolute right-3 bottom-3 rounded-xl bg-white/90 px-3 py-2 text-xs font-black text-slate-900"><SwitchCamera className="mr-1 inline h-4 w-4" />{facingMode === 'environment' ? 'Trasera' : 'Frontal'}</button>
         </div>
@@ -433,7 +508,7 @@ export const DatasetContributionScreen: React.FC = () => {
         {status && <p role="status" className="mt-3 rounded-xl bg-emerald-50 p-3 text-sm text-emerald-800">{status}</p>}
       </section>
       <section className="min-w-0 space-y-4 rounded-3xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
-        <div><p className="text-xs font-black uppercase tracking-wider text-emerald-700">Etiqueta LSD</p><select value={selectedLabel} onChange={(event) => { setSelectedLabel(event.target.value); setCaptured(null); }} disabled={recording || busy} className="mt-2 w-full rounded-xl border border-slate-300 px-3 py-3 text-sm font-bold">{labels.map((label) => <option key={label.code} value={label.code}>{label.display_name}</option>)}</select><p className="mt-2 text-xs text-slate-500">Tipo: {selected?.motion_type === 'two_hand' ? 'dos manos' : selected?.motion_type === 'dynamic' ? 'con movimiento' : 'estática'}</p></div>
+        <div><p className="text-xs font-black uppercase tracking-wider text-emerald-700">Etiqueta LSD</p><select value={selectedLabel} onChange={(event) => { setAwaitingProposalName(''); setSelectedLabel(event.target.value); setCaptured(null); }} disabled={recording || busy || Boolean(captured)} className="mt-2 w-full rounded-xl border border-slate-300 px-3 py-3 text-sm font-bold"><option value="" disabled>{awaitingProposalName ? `Esperando aprobación de “${awaitingProposalName}”` : 'Selecciona una palabra o frase'}</option>{labels.map((label) => <option key={label.code} value={label.code}>{label.display_name}</option>)}</select><p className="mt-2 text-xs text-slate-500">{selected ? `Tipo: ${selected.motion_type === 'two_hand' ? 'dos manos' : selected.motion_type === 'dynamic' ? 'con movimiento' : 'estática'}` : 'Selecciona una etiqueta aprobada antes de grabar.'}</p></div>
         <details className="rounded-2xl border border-blue-200 bg-blue-50 p-4">
           <summary className="flex cursor-pointer list-none items-center gap-2 text-sm font-black text-blue-950"><MessageSquarePlus className="h-5 w-5" />¿No encuentras la palabra o frase?</summary>
           <form onSubmit={submitLabelProposal} className="mt-3 space-y-3">
@@ -441,10 +516,10 @@ export const DatasetContributionScreen: React.FC = () => {
             <label className="block text-xs font-bold text-blue-950">Tipo de seña<select value={proposedMotion} onChange={(event) => setProposedMotion(event.target.value as SignLabel['motion_type'])} className="mt-1.5 w-full rounded-xl border border-blue-200 bg-white px-3 py-3 text-sm font-normal text-slate-900"><option value="dynamic">Con movimiento</option><option value="static">Estática</option><option value="two_hand">Dos manos</option></select></label>
             <button disabled={proposalSaving || proposedText.trim().length < 2} className="flex w-full items-center justify-center gap-2 rounded-xl bg-blue-700 px-4 py-3 text-xs font-black text-white disabled:opacity-40">{proposalSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <MessageSquarePlus className="h-4 w-4" />}Enviar propuesta</button>
           </form>
-          {proposals.length > 0 && <div className="mt-4 space-y-2"><p className="text-[11px] font-black uppercase tracking-wider text-blue-900">Tus propuestas recientes</p>{proposals.slice(0, 4).map((proposal) => <div key={proposal.id} className="rounded-xl bg-white p-3 text-xs"><div className="flex items-center justify-between gap-2"><span className="font-bold text-slate-800">{proposal.display_name}</span><span className={`rounded-full px-2 py-1 text-[10px] font-black ${proposal.status === 'approved' ? 'bg-emerald-100 text-emerald-700' : proposal.status === 'rejected' ? 'bg-rose-100 text-rose-700' : 'bg-amber-100 text-amber-700'}`}>{proposal.status === 'approved' ? 'Aprobada' : proposal.status === 'rejected' ? 'Rechazada' : 'Pendiente'}</span></div>{proposal.rejection_reason && <p className="mt-1 text-rose-600">{proposal.rejection_reason}</p>}</div>)}</div>}
+          {proposals.length > 0 && <div className="mt-4 space-y-2"><p className="text-[11px] font-black uppercase tracking-wider text-blue-900">Tus propuestas recientes</p>{proposals.slice(0, 4).map((proposal) => { const approvedLabel = labels.find((label) => label.display_name.toLocaleLowerCase('es') === proposal.display_name.toLocaleLowerCase('es')); return <div key={proposal.id} className="rounded-xl bg-white p-3 text-xs"><div className="flex items-center justify-between gap-2"><span className="font-bold text-slate-800">{proposal.display_name}</span><span className={`rounded-full px-2 py-1 text-[10px] font-black ${proposal.status === 'approved' ? 'bg-emerald-100 text-emerald-700' : proposal.status === 'rejected' ? 'bg-rose-100 text-rose-700' : 'bg-amber-100 text-amber-700'}`}>{proposal.status === 'approved' ? 'Aprobada' : proposal.status === 'rejected' ? 'Rechazada' : 'Pendiente'}</span></div>{proposal.rejection_reason && <p className="mt-1 text-rose-600">{proposal.rejection_reason}</p>}{proposal.status === 'approved' && approvedLabel && <button type="button" onClick={() => { setAwaitingProposalName(''); setSelectedLabel(approvedLabel.code); setCaptured(null); }} className="mt-2 w-full rounded-lg bg-emerald-600 px-3 py-2 font-black text-white">Grabar esta frase</button>}</div>; })}</div>}
         </details>
-        <div className="rounded-2xl bg-slate-50 p-4 text-xs leading-relaxed text-slate-600"><strong className="text-slate-900">Cómo grabar:</strong> muestra la seña completa, deja ambas manos dentro del encuadre y evita que otra persona aparezca en el video.</div>
-        {!captured ? <button onClick={startRecording} disabled={!cameraReady || recording || busy} className="w-full rounded-2xl bg-rose-600 px-5 py-3.5 text-sm font-black text-white disabled:opacity-40"><Camera className="mr-2 inline h-4 w-4" />{recording ? 'Grabando…' : 'Grabar ejemplo de 3 segundos'}</button> : <div className="space-y-3"><video src={previewUrl} controls playsInline className="aspect-video w-full rounded-2xl bg-black object-contain" /><p className="text-xs font-semibold text-slate-600">{captured.frames.length} fotogramas útiles con manos detectadas.</p><div className="grid grid-cols-2 gap-2"><button onClick={() => setCaptured(null)} disabled={busy} className="rounded-xl bg-slate-100 px-3 py-3 text-xs font-black text-slate-700"><RotateCcw className="mr-1 inline h-4 w-4" />Repetir</button><button onClick={() => void saveCapture()} disabled={busy || !approvedConsent} className="rounded-xl bg-emerald-600 px-3 py-3 text-xs font-black text-white disabled:opacity-40">{busy ? <Loader2 className="mr-1 inline h-4 w-4 animate-spin" /> : <Upload className="mr-1 inline h-4 w-4" />}Enviar</button></div><label className="flex items-start gap-2 rounded-xl bg-emerald-50 p-3 text-xs text-emerald-900"><input type="checkbox" checked={approvedConsent} onChange={(event) => setApprovedConsent(event.target.checked)} className="mt-0.5" /><span>Confirmo que la etiqueta es correcta y que deseo aportar esta grabación.</span></label></div>}
+        <div className="rounded-2xl bg-slate-50 p-4 text-xs leading-relaxed text-slate-600"><strong className="text-slate-900">Cómo grabar:</strong> muestra cabeza, cuello, hombros y pecho junto con la seña completa. Deja ambas manos dentro del encuadre y evita que otra persona aparezca en el video.</div>
+        {!captured ? <button onClick={startRecording} disabled={!cameraReady || recording || busy || !selected} className="w-full rounded-2xl bg-rose-600 px-5 py-3.5 text-sm font-black text-white disabled:opacity-40"><Camera className="mr-2 inline h-4 w-4" />{recording ? 'Grabando…' : selected ? `Grabar “${selected.display_name}”` : 'Selecciona una etiqueta aprobada'}</button> : <div className="space-y-3"><video src={previewUrl} controls playsInline className="aspect-video w-full rounded-2xl bg-black object-contain" /><p className="text-xs font-semibold text-slate-600"><strong>Etiqueta bloqueada: {captured.labelName}.</strong> {captured.frames.length} fotogramas útiles con manos detectadas.</p><div className="grid grid-cols-2 gap-2"><button onClick={() => setCaptured(null)} disabled={busy} className="rounded-xl bg-slate-100 px-3 py-3 text-xs font-black text-slate-700"><RotateCcw className="mr-1 inline h-4 w-4" />Repetir</button><button onClick={() => void saveCapture()} disabled={busy || !approvedConsent} className="rounded-xl bg-emerald-600 px-3 py-3 text-xs font-black text-white disabled:opacity-40">{busy ? <Loader2 className="mr-1 inline h-4 w-4 animate-spin" /> : <Upload className="mr-1 inline h-4 w-4" />}Enviar</button></div><label className="flex items-start gap-2 rounded-xl bg-emerald-50 p-3 text-xs text-emerald-900"><input type="checkbox" checked={approvedConsent} onChange={(event) => setApprovedConsent(event.target.checked)} className="mt-0.5" /><span>Confirmo que el video corresponde exactamente a “{captured.labelName}” y deseo aportarlo.</span></label></div>}
         <div className="border-t border-slate-100 pt-4"><p className="flex items-center gap-2 text-xs font-bold text-slate-600"><Database className="h-4 w-4" />Los videos se almacenan en un bucket privado.</p><button onClick={() => void syncPending()} disabled={!pendingCount || busy || !navigator.onLine} className="mt-3 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-xs font-bold disabled:opacity-40"><CheckCircle2 className="mr-1 inline h-4 w-4" />Sincronizar pendientes</button><button onClick={() => void withdrawConsent()} disabled={busy || !navigator.onLine} className="mt-2 w-full rounded-xl px-3 py-2.5 text-xs font-bold text-rose-600 disabled:opacity-40"><Trash2 className="mr-1 inline h-4 w-4" />Retirar consentimiento y borrar aportes</button></div>
       </section>
     </div>
