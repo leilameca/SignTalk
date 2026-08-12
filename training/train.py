@@ -6,6 +6,7 @@ import argparse
 import json
 import shutil
 import tempfile
+from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -76,7 +77,13 @@ def main(arguments) -> None:
     label_to_index = {label: index for index, label in enumerate(label_codes)}
     encoded_labels = np.asarray([label_to_index[label] for label in dataset.labels], dtype=np.int32)
     participant_count = len(set(dataset.participants.tolist()))
-    experimental = participant_count < 3 or min(np.bincount(encoded_labels)) < 3
+    participants_by_label: dict[int, set[str]] = defaultdict(set)
+    for label, participant in zip(encoded_labels.tolist(), dataset.participants.tolist()):
+        participants_by_label[int(label)].add(str(participant))
+    minimum_label_participants = min(len(participants) for participants in participants_by_label.values())
+    # A participant holdout is valid only when every class has enough different
+    # people. The total participant count alone is insufficient for new labels.
+    experimental = participant_count < 3 or min(np.bincount(encoded_labels)) < 3 or minimum_label_participants < 3
     if experimental and not allow_experimental:
         raise SystemExit("Los datos requieren modo experimental, pero el panel lo tiene desactivado.")
     if experimental:
@@ -115,6 +122,7 @@ def main(arguments) -> None:
         "minimumClassRecall": float(per_class_recall.min()),
         "testSamples": int(len(test)),
         "participants": int(len(set(dataset.participants.tolist()))),
+        "minimumParticipantsPerClass": minimum_label_participants,
         "samples": int(len(dataset.features)),
         "bodyContextSamples": body_context_samples,
         "evaluationMode": "experimental-resubstitution" if experimental else "participant-holdout",
@@ -139,7 +147,7 @@ def main(arguments) -> None:
             "experimental": experimental,
             "evaluationMode": report["evaluationMode"],
             "labels": [{"code": code, "displayName": dataset.label_names.get(code, code)} for code in label_codes],
-            "metrics": {"macroF1": macro_f1, "minimumClassRecall": float(per_class_recall.min()), "testSamples": len(test), "samples": len(dataset.features), "participants": participant_count, "bodyContextSamples": body_context_samples},
+            "metrics": {"macroF1": macro_f1, "minimumClassRecall": float(per_class_recall.min()), "testSamples": len(test), "samples": len(dataset.features), "participants": participant_count, "minimumParticipantsPerClass": minimum_label_participants, "bodyContextSamples": body_context_samples},
             "trainedAt": datetime.now(timezone.utc).isoformat(),
         }
         (staging / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")

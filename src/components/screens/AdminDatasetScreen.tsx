@@ -36,7 +36,7 @@ interface LsdModelManifestSummary {
   version: string;
   variant: 'LSD';
   labels: Array<{ code: string; displayName: string }>;
-  metrics: { macroF1: number; minimumClassRecall: number; testSamples: number; samples?: number; participants?: number; bodyContextSamples?: number } | null;
+  metrics: { macroF1: number; minimumClassRecall: number; testSamples: number; samples?: number; participants?: number; minimumParticipantsPerClass?: number; bodyContextSamples?: number } | null;
   trainedAt: string | null;
   evaluationMode?: string;
 }
