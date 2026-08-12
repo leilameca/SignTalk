@@ -93,7 +93,9 @@ def main(arguments) -> None:
     minimum_label_participants = min(len(participants) for participants in participants_by_label.values())
     # A participant holdout is valid only when every class has enough different
     # people. The total participant count alone is insufficient for new labels.
-    experimental = participant_count < 3 or min(np.bincount(encoded_labels)) < 3 or minimum_label_participants < 3
+    # np.bincount returns NumPy scalars; coerce the combined flag to a native
+    # bool so it can be serialized into the browser model manifest.
+    experimental = bool(participant_count < 3 or min(np.bincount(encoded_labels)) < 3 or minimum_label_participants < 3)
     if experimental and not allow_experimental:
         raise SystemExit("Los datos requieren modo experimental, pero el panel lo tiene desactivado.")
     if experimental:
