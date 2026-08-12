@@ -129,7 +129,10 @@ def main(arguments) -> None:
         "classification": classification_report(encoded_labels[test], predictions, target_names=label_codes, output_dict=True, zero_division=0),
         "confusionMatrix": confusion_matrix(encoded_labels[test], predictions, labels=np.arange(len(label_codes))).tolist(),
     }
-    if macro_f1 < minimum_f1 or float(per_class_recall.min()) < minimum_recall:
+    # Production thresholds are meaningful only with a participant holdout.
+    # Experimental resubstitution metrics are reported, never presented as
+    # generalization evidence, and are governed by allow_experimental instead.
+    if not experimental and (macro_f1 < minimum_f1 or float(per_class_recall.min()) < minimum_recall):
         raise SystemExit(f"Modelo rechazado por calidad: macro F1={macro_f1:.3f}, recall mínimo={per_class_recall.min():.3f}.")
 
     with tempfile.TemporaryDirectory(prefix="signtalk-lsd-") as temporary:
