@@ -20,6 +20,14 @@ from sklearn.utils.class_weight import compute_class_weight
 from preprocess import BASE_FEATURE_COUNT, FEATURE_CONTRACT, FEATURE_COUNT, INTER_HAND_FEATURES, MOTION_FEATURES_PER_HAND, MAX_HANDS, POSE_POINT_COUNT, COORDINATES, SEQUENCE_LENGTH, prepare_dataset, validate_coverage
 
 
+CURRENT_STAGE = "startup"
+
+
+def set_stage(stage: str) -> None:
+    global CURRENT_STAGE
+    CURRENT_STAGE = stage
+
+
 def split_by_participant(features, labels, groups, seed: int):
     outer = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=seed)
     train_val, test = next(outer.split(features, labels, groups))
@@ -60,6 +68,7 @@ def augment_startup(features: np.ndarray, labels: np.ndarray, copies: int = 16):
 
 
 def main(arguments) -> None:
+    set_stage("dataset-load")
     np.random.seed(arguments.seed)
     tf.random.set_seed(arguments.seed)
     payload = json.loads(arguments.input.read_text(encoding="utf-8"))
@@ -73,6 +82,7 @@ def main(arguments) -> None:
     allow_experimental = bool(settings.get("allow_experimental", False))
     validate_coverage(dataset, minimum_samples, minimum_participants)
 
+    set_stage("label-preparation")
     label_codes = sorted(set(dataset.labels.tolist()))
     label_to_index = {label: index for index, label in enumerate(label_codes)}
     encoded_labels = np.asarray([label_to_index[label] for label in dataset.labels], dtype=np.int32)
@@ -97,10 +107,13 @@ def main(arguments) -> None:
                 raise SystemExit(f"La división de {name} no contiene: {', '.join(label_codes[index] for index in sorted(missing))}. Reúne más participantes.")
         training_features, training_labels = dataset.features[train], encoded_labels[train]
 
+    set_stage("class-weights")
     weights = compute_class_weight(class_weight="balanced", classes=np.arange(len(label_codes)), y=training_labels)
+    set_stage("model-build")
     model = build_model(len(label_codes))
     monitor = "loss" if experimental else "val_loss"
     callbacks = [tf.keras.callbacks.EarlyStopping(monitor=monitor, patience=12, restore_best_weights=True), tf.keras.callbacks.ReduceLROnPlateau(monitor=monitor, patience=5, factor=0.5, min_lr=1e-5)]
+    set_stage("model-fit")
     model.fit(
         training_features, training_labels,
         validation_data=None if experimental else (dataset.features[validation], encoded_labels[validation]),
@@ -111,6 +124,7 @@ def main(arguments) -> None:
         verbose=2,
     )
 
+    set_stage("evaluation")
     probabilities = model.predict(dataset.features[test], verbose=0)
     predictions = probabilities.argmax(axis=1)
     macro_f1 = float(f1_score(encoded_labels[test], predictions, average="macro"))
@@ -135,10 +149,12 @@ def main(arguments) -> None:
     if not experimental and (macro_f1 < minimum_f1 or float(per_class_recall.min()) < minimum_recall):
         raise SystemExit(f"Modelo rechazado por calidad: macro F1={macro_f1:.3f}, recall mínimo={per_class_recall.min():.3f}.")
 
+    set_stage("tfjs-export")
     with tempfile.TemporaryDirectory(prefix="signtalk-lsd-") as temporary:
         staging = Path(temporary) / "model"
         staging.mkdir()
         tfjs.converters.save_keras_model(model, str(staging))
+        set_stage("manifest-write")
         manifest = {
             "available": True,
             "version": datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"),
@@ -184,5 +200,5 @@ if __name__ == "__main__":
         print(f"::error title=LSD training failed::category={category}; type={type(error).__name__}")
         raise SystemExit(1) from None
     except Exception as error:
-        print(f"::error title=LSD training failed::category=runtime; type={type(error).__name__}")
+        print(f"::error title=LSD training failed::category=runtime; stage={CURRENT_STAGE}; type={type(error).__name__}")
         raise SystemExit(1) from None
