@@ -1,6 +1,6 @@
 {
   "available": true,
-  "version": "20260812T215543Z",
+  "version": "20260814T013400Z",
   "variant": "LSD",
   "sequenceLength": 48,
   "featureCount": 208,
@@ -33,11 +33,11 @@
   "metrics": {
     "macroF1": 1.0,
     "minimumClassRecall": 1.0,
-    "testSamples": 18,
-    "samples": 18,
+    "testSamples": 22,
+    "samples": 22,
     "participants": 3,
     "minimumParticipantsPerClass": 2,
-    "bodyContextSamples": 14
+    "bodyContextSamples": 18
   },
-  "trainedAt": "2026-08-12T21:55:43.028179+00:00"
+  "trainedAt": "2026-08-14T01:34:00.702627+00:00"
 }
