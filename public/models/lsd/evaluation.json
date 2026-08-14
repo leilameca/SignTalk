@@ -1,13 +1,19 @@
 {
   "macroF1": 1.0,
   "minimumClassRecall": 1.0,
-  "testSamples": 22,
+  "testSamples": 31,
   "participants": 3,
-  "minimumParticipantsPerClass": 2,
-  "samples": 22,
-  "bodyContextSamples": 18,
+  "minimumParticipantsPerClass": 1,
+  "samples": 31,
+  "bodyContextSamples": 27,
   "evaluationMode": "experimental-resubstitution",
   "classification": {
+    "community_04df0822ee7f483a": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1-score": 1.0,
+      "support": 2.0
+    },
     "gracias": {
       "precision": 1.0,
       "recall": 1.0,
@@ -18,7 +24,7 @@
       "precision": 1.0,
       "recall": 1.0,
       "f1-score": 1.0,
-      "support": 3.0
+      "support": 7.0
     },
     "no": {
       "precision": 1.0,
@@ -36,49 +42,72 @@
       "precision": 1.0,
       "recall": 1.0,
       "f1-score": 1.0,
-      "support": 2.0
+      "support": 4.0
+    },
+    "te_quiero": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1-score": 1.0,
+      "support": 1.0
     },
     "accuracy": 1.0,
     "macro avg": {
       "precision": 1.0,
       "recall": 1.0,
       "f1-score": 1.0,
-      "support": 22.0
+      "support": 31.0
     },
     "weighted avg": {
       "precision": 1.0,
       "recall": 1.0,
       "f1-score": 1.0,
-      "support": 22.0
+      "support": 31.0
     }
   },
   "confusionMatrix": [
     [
+      2,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    [
+      0,
       9,
       0,
       0,
       0,
-      0
-    ],
-    [
-      0,
-      3,
-      0,
       0,
       0
     ],
     [
+      0,
+      0,
+      7,
+      0,
+      0,
+      0,
+      0
+    ],
+    [
+      0,
       0,
       0,
       6,
       0,
+      0,
       0
     ],
     [
+      0,
       0,
       0,
       0,
       2,
+      0,
       0
     ],
     [
@@ -86,7 +115,18 @@
       0,
       0,
       0,
-      2
+      0,
+      4,
+      0
+    ],
+    [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      1
     ]
   ]
 }

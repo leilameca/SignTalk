@@ -1,6 +1,6 @@
 {
   "available": true,
-  "version": "20260814T013400Z",
+  "version": "20260814T014326Z",
   "variant": "LSD",
   "sequenceLength": 48,
   "featureCount": 208,
@@ -9,6 +9,10 @@
   "experimental": true,
   "evaluationMode": "experimental-resubstitution",
   "labels": [
+    {
+      "code": "community_04df0822ee7f483a",
+      "displayName": "dinero"
+    },
     {
       "code": "gracias",
       "displayName": "Gracias"
@@ -28,16 +32,20 @@
     {
       "code": "si",
       "displayName": "Sí"
+    },
+    {
+      "code": "te_quiero",
+      "displayName": "Te quiero"
     }
   ],
   "metrics": {
     "macroF1": 1.0,
     "minimumClassRecall": 1.0,
-    "testSamples": 22,
-    "samples": 22,
+    "testSamples": 31,
+    "samples": 31,
     "participants": 3,
-    "minimumParticipantsPerClass": 2,
-    "bodyContextSamples": 18
+    "minimumParticipantsPerClass": 1,
+    "bodyContextSamples": 27
   },
-  "trainedAt": "2026-08-14T01:34:00.702627+00:00"
+  "trainedAt": "2026-08-14T01:43:26.882450+00:00"
 }
