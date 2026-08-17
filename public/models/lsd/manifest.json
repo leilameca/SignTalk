@@ -1,6 +1,6 @@
 {
   "available": true,
-  "version": "20260814T014326Z",
+  "version": "20260817T084609Z",
   "variant": "LSD",
   "sequenceLength": 48,
   "featureCount": 208,
@@ -47,5 +47,5 @@
     "minimumParticipantsPerClass": 1,
     "bodyContextSamples": 27
   },
-  "trainedAt": "2026-08-14T01:43:26.882450+00:00"
+  "trainedAt": "2026-08-17T08:46:09.592354+00:00"
 }
